@@ -1,0 +1,11 @@
+{
+    "sam": {
+        "sam_encoder_version": "vit_h",
+        "sam_checkpoint_path": "/workspace/Gaga/weight/sam_vit_h_4b8939.pth",
+        "sam_num_points_per_side": 32,
+        "sam_num_points_per_batch": 32,
+        "sam_pred_iou_threshold": 0.7,
+        "sam_crop_n_layers": 0,
+        "confidence_threshold": 0.5
+    }
+}

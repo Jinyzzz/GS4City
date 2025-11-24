@@ -1,0 +1,122 @@
+# ========================
+# 你项目里的大目录（不上传）
+# ========================
+dataset/
+model/
+output/
+
+# 训练常见目录（不上传）
+checkpoints/
+runs/
+logs/
+wandb/
+tensorboard/
+lightning_logs/
+
+--------间结果
+results/
+tmp/
+temp/
+
+git config --global user.email "jinyu.zhu@tum.de" 
+*.pth
+*.pt
+*.ckpt
+*.hdf5
+*.h5
+*.onnx
+*.tflite
+
+# ========================
+# Python 通用忽略
+# ========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C 扩展
+*.so
+
+# 分发 / 打包
+.Python
+build/
+dist/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+#  / 覆盖率
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache/
+pytest_cache/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.nbconvert.ipynb
+
+# ========================
+# 虚拟环境 / 依赖管理
+# ========================
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+pip-log.txt
+pip-delete-this-directory.txt
+.poetry/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# ========================
+# 编辑器 / IDE 配置
+# ========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+
+# ========================
+# 系统文件
+# ========================
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Icon?
+Desktop.ini
+
+# ========================
+# 其他临时文件 / 缓存
+# ========================
+*.log
+*.tmp
+*.temp
+tmp/
+temp/
+~$*
