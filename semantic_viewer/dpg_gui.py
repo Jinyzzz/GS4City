@@ -179,6 +179,8 @@ class SemanticGaussianGUI:
 
     # ---------- DearPyGUI 注册 ----------
     def register_dpg(self):
+        RIGHT_PANEL_WIDTH = 400  # 比原来的 320 更宽；你可以改成 380 / 420 等
+        RIGHT_PANEL_X = self.window_width + 10
         # 纹理
         with dpg.texture_registry(show=False):
             dpg.add_raw_texture(
@@ -195,33 +197,39 @@ class SemanticGaussianGUI:
 
         dpg.set_primary_window("_primary_window", True)
 
-        # 控制窗口
+        # --------- 窗口 1：Building / Selection（始终展开，无滚轮） ---------
+        INFO_HEIGHT = 300  # 你可以按需要微调，比如 280
+
         with dpg.window(
-            label="Control",
-            tag="_control_window",
-            width=320,
-            height=400,
+            label="Building / Selection",
+            tag="_info_window",
+            width=RIGHT_PANEL_WIDTH,
+            height=INFO_HEIGHT,
             pos=[self.window_width + 10, 0],
+            no_move=True,
+            no_resize=True,
+            no_collapse=True,   # 不允许折叠
+            no_close=True,
+            no_scrollbar=True,  # 不要滚动条
         ):
-            # Building Info
-            dpg.add_text("🏠 Building Info")
+            dpg.add_text("Building Info")
             dpg.add_input_text(
                 tag="_building_info_text",
                 multiline=True,
                 readonly=True,
                 default_value="No building selected.",
-                width=300,
+                width=RIGHT_PANEL_WIDTH - 20,
                 height=110,
             )
 
             dpg.add_spacer(height=4)
-            dpg.add_text("🎯 Selection Info")
+            dpg.add_text("Selection Info")
             dpg.add_input_text(
                 tag="_selection_info_text",
                 multiline=True,
                 readonly=True,
                 default_value="No selection yet.",
-                width=300,
+                width=RIGHT_PANEL_WIDTH - 20,
                 height=80,
             )
 
@@ -231,129 +239,140 @@ class SemanticGaussianGUI:
                     callback=lambda: self.clear_selection()
                 )
 
+        # --------- 窗口 2：Controls（View + Interaction + Search，可折叠，有滚轮） ---------
+        CONTROLS_HEIGHT = self.window_height - INFO_HEIGHT - 20  # 20 像素留个间距
+
+        with dpg.window(
+            label="Controls",
+            tag="_controls_window",
+            width=RIGHT_PANEL_WIDTH,
+            height=CONTROLS_HEIGHT,
+            pos=[self.window_width + 10, INFO_HEIGHT + 10],
+            no_move=True,
+            no_resize=True,
+            no_close=True,
+            # 注意：不写 no_collapse / no_scrollbar => 默认可折叠 + 有滚轮
+        ):
+            # --- View & Camera 部分 ---
+            dpg.add_text("Render Mode")
+            dpg.add_radio_button(
+                items=["RGB", "Segmentation", "Overlay"],
+                default_value=self.mode,
+                callback=lambda s, a: self.set_render_mode(a),
+                tag="_mode_radio",
+            )
+
+            dpg.add_spacer(height=4)
             dpg.add_separator()
 
-            # 1. View & Camera
-            with dpg.collapsing_header(label="1. View & Camera", default_open=True):
-                dpg.add_text("Render Mode")
-                dpg.add_radio_button(
-                    items=["RGB", "Segmentation", "Overlay"],
-                    default_value=self.mode,
-                    callback=lambda s, a: self.set_render_mode(a),
-                    tag="_mode_radio",
-                )
+            dpg.add_text("Orbit Camera")
 
-                dpg.add_spacer(height=4)
-                dpg.add_separator()
-
-                dpg.add_text("Orbit Camera")
-
-                with dpg.group(horizontal=True):
-                    dpg.add_button(
-                        label="Reset View",
-                        callback=lambda: self.reset_view_orbit(),
-                    )
-                    dpg.add_button(
-                        label="Use Orbit",
-                        callback=lambda: self.set_use_train_cam(False),
-                    )
-
-                dpg.add_spacer(height=2)
-                with dpg.group(horizontal=True):
-                    dpg.add_button(
-                        label="Zoom In",
-                        callback=lambda: self.zoom_step(-1),
-                        width=70,
-                    )
-                    dpg.add_button(
-                        label="Zoom Out",
-                        callback=lambda: self.zoom_step(+1),
-                        width=70,
-                    )
-
-                with dpg.group(horizontal=True):
-                    dpg.add_button(
-                        label="↑ Tilt Up",
-                        callback=lambda: self.orbit_step(0, -10),
-                        width=80,
-                    )
-                    dpg.add_button(
-                        label="↓ Tilt Down",
-                        callback=lambda: self.orbit_step(0, +10),
-                        width=80,
-                    )
-
-                with dpg.group(horizontal=True):
-                    dpg.add_button(
-                        label="← Pan Left",
-                        callback=lambda: self.pan_step(-10, 0),
-                        width=80,
-                    )
-                    dpg.add_button(
-                        label="→ Pan Right",
-                        callback=lambda: self.pan_step(+10, 0),
-                        width=80,
-                    )
-
-                dpg.add_spacer(height=4)
-                dpg.add_separator()
-
-                dpg.add_text("Train Cameras")
-
-                if self.train_cam_names:
-                    dpg.add_combo(
-                        label="Camera View",
-                        items=self.train_cam_names,
-                        default_value=self.train_cam_names[self.active_train_cam_idx],
-                        callback=lambda s, a: self.on_select_train_cam(a),
-                        width=280,
-                        tag="_train_cam_combo",
-                    )
-
-                    dpg.add_checkbox(
-                        label="Use Train Camera",
-                        default_value=self.use_train_cam,
-                        callback=lambda s, a: self.set_use_train_cam(a),
-                    )
-                else:
-                    dpg.add_text("No train cameras found.", color=(200, 200, 200))
-
-            dpg.add_separator()
-
-            # 2. Interaction State
-            with dpg.collapsing_header(label="2. Interaction State", default_open=True):
-                dpg.add_text("Mouse position: ", tag="pos_item")
-
-                dpg.add_spacer(height=4)
-                dpg.add_text("Hierarchy / Mask Level")
-                dpg.add_text("0 = 当前对象, 1 = 父, 2 = 父的父 ...")
-                dpg.add_slider_int(
-                    label="Mask Level",
-                    tag="_mask_level_slider",
-                    default_value=self.hierarchy.mask_level,
-                    min_value=0,
-                    max_value=2,   # 只要 0,1,2 三挡
-                    callback=lambda s, a: self.set_mask_level(a),
-                    width=280,
-                )
-
-
-            dpg.add_separator()
-
-            # 3. Search
-            with dpg.collapsing_header(label="3. Search (Reserved)", default_open=False):
-                dpg.add_text("Search panel is reserved for future use.")
-                dpg.add_input_text(
-                    label="Search CityObject ID / name",
-                    tag="_search_input",
-                    width=250,
+            with dpg.group(horizontal=True):
+                dpg.add_button(
+                    label="Reset View",
+                    callback=lambda: self.reset_view_orbit(),
                 )
                 dpg.add_button(
-                    label="Search & Focus (TODO)",
-                    callback=lambda: self.search_and_focus(
-                        dpg.get_value("_search_input")
-                    ),
+                    label="Use Orbit",
+                    callback=lambda: self.set_use_train_cam(False),
                 )
+
+            dpg.add_spacer(height=2)
+            with dpg.group(horizontal=True):
+                dpg.add_button(
+                    label="Zoom In",
+                    callback=lambda: self.zoom_step(-1),
+                    width=70,
+                )
+                dpg.add_button(
+                    label="Zoom Out",
+                    callback=lambda: self.zoom_step(+1),
+                    width=70,
+                )
+
+            with dpg.group(horizontal=True):
+                dpg.add_button(
+                    label="Tilt Up",
+                    callback=lambda: self.orbit_step(0, -10),
+                    width=80,
+                )
+                dpg.add_button(
+                    label="Tilt Down",
+                    callback=lambda: self.orbit_step(0, +10),
+                    width=80,
+                )
+
+            with dpg.group(horizontal=True):
+                dpg.add_button(
+                    label="Pan Left",
+                    callback=lambda: self.pan_step(-10, 0),
+                    width=80,
+                )
+                dpg.add_button(
+                    label="Pan Right",
+                    callback=lambda: self.pan_step(+10, 0),
+                    width=80,
+                )
+
+            dpg.add_spacer(height=4)
+            dpg.add_separator()
+
+            dpg.add_text("Train Cameras")
+            if self.train_cam_names:
+                dpg.add_combo(
+                    label="Camera View",
+                    items=self.train_cam_names,
+                    default_value=self.train_cam_names[self.active_train_cam_idx],
+                    callback=lambda s, a: self.on_select_train_cam(a),
+                    width=280,
+                    tag="_train_cam_combo",
+                )
+
+                dpg.add_checkbox(
+                    label="Use Train Camera",
+                    default_value=self.use_train_cam,
+                    callback=lambda s, a: self.set_use_train_cam(a),
+                )
+            else:
+                dpg.add_text("No train cameras found.", color=(200, 200, 200))
+
+            dpg.add_separator()
+            dpg.add_spacer(height=4)
+
+            # --- Interaction / Mask 部分 ---
+            dpg.add_text("Mouse position: ", tag="pos_item")
+
+            dpg.add_spacer(height=4)
+            dpg.add_text("Hierarchy / Mask Level")
+            dpg.add_text("0 = part, 1 = surface, 2 = building")
+
+            dpg.add_slider_int(
+                label="Mask Level",
+                tag="_mask_level_slider",
+                default_value=self.hierarchy.mask_level,
+                min_value=0,
+                max_value=2,
+                callback=lambda s, a: self.set_mask_level(a),
+                width=280,
+            )
+
+            dpg.add_separator()
+            dpg.add_spacer(height=4)
+
+            # --- Search 部分 ---
+            dpg.add_text("Search (Reserved)")
+            dpg.add_input_text(
+                label="Search CityObject ID / name",
+                tag="_search_input",
+                width=250,
+            )
+            dpg.add_button(
+                label="Search & Focus (TODO)",
+                callback=lambda: self.search_and_focus(
+                    dpg.get_value("_search_input")
+                ),
+            )
+
 
         # 去 padding
         with dpg.theme() as theme_no_padding:
@@ -411,8 +430,6 @@ class SemanticGaussianGUI:
         def pick_instance_id():
             if self.label_map_compact is None:
                 return
-            if not dpg.is_item_focused("_primary_window"):
-                return
 
             mx, my = dpg.get_mouse_pos(local=False)
             win_x, win_y = dpg.get_item_pos("_primary_window")
@@ -468,7 +485,7 @@ class SemanticGaussianGUI:
 
         dpg.create_viewport(
             title="Gaga Semantic Gaussian Viewer",
-            width=self.window_width + 340,
+            width=self.window_width + RIGHT_PANEL_WIDTH + 10,
             height=self.window_height,
             resizable=False,
         )

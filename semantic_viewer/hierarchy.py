@@ -247,7 +247,7 @@ class HierarchyManager:
 
             # Storeys + 层
             s_val = attrs.get("storeysAboveGround", None)
-            storeys_str = "N/A" if s_val is None else f"{s_val} 层"
+            storeys_str = "N/A" if s_val is None else f"{s_val} floors"
 
             # Function 映射
             raw_func = attrs.get("function", None)
@@ -292,25 +292,18 @@ class HierarchyManager:
         # ---------- Selection Info 文本 ----------
         if leaf_city_id is not None and leaf_city_id in self.city_semantics:
             sdata = self.city_semantics.get(leaf_city_id, {})
-            attrs = sdata.get("attributes", {}) or {}
-            f = attrs.get("feature", "N/A")
-            s_ = attrs.get("surface", "N/A")
-            p = attrs.get("part", "N/A")
 
             selection_text = "\n".join([
-                f"Object ID: {leaf_city_id}",
+                f"Gray ID: {gray_id}",
+                f"CityObject ID: {leaf_city_id}",
                 f"Type: {sdata.get('type', 'N/A')}",
-                f"Gray ID (clicked): {gray_id}",
-                f"Mask Level: {self.mask_level}",
-                f"Feature: {f}",
-                f"Surface: {s_}",
-                f"Part: {p}",
             ])
         else:
+            # 没有语义映射的物体：只显示灰度值
             selection_text = "\n".join([
-                f"Unknown semantic object.",
-                f"Gray ID (clicked): {gray_id}",
-                f"Mask Level: {self.mask_level}",
+                f"Gray ID: {gray_id}",
+                "CityObject ID: N/A",
+                "Type: Unknown",
             ])
 
         return {
