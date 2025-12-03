@@ -5,33 +5,6 @@ from argparse import ArgumentParser
 from tqdm import tqdm
 
 
-def compute_global_gml_max_id(gml_dir):
-    """
-    在整个 gml_mask 文件夹中，统计所有图像中的最大 ID（>0）。
-    若目录为空或都为 0，则返回 0。
-    """
-    max_id = 0
-    if not os.path.exists(gml_dir):
-        print(f"[WARN] gml_mask dir not found: {gml_dir}")
-        return 0
-
-    files = sorted(os.listdir(gml_dir))
-    for name in files:
-        if not name.lower().endswith((".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp")):
-            continue
-        path = os.path.join(gml_dir, name)
-        img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
-        if img is None:
-            print(f"[WARN] cannot read gml mask: {path}")
-            continue
-        cur_max = int(np.max(img))
-        if cur_max > max_id:
-            max_id = cur_max
-
-    print(f"[INFO] Global max GML id in {gml_dir}: {max_id}")
-    return max_id
-
-
 def id_to_color(idx: int):
     """
     给定一个实例 id（uint16），生成一个确定性的 RGB 颜色。
@@ -87,7 +60,7 @@ def fuse_one_image(
 
     H, W = gml.shape[:2]
 
-    # SAM ID 整体偏移，避免和 GML ID 冲突
+    # SAM ID 整体偏移，统一加上 sam_id_offset
     sam = sam.astype(np.uint32)  # 防止加偏移溢出
     sam_nonzero = sam != 0
     sam[sam_nonzero] = sam[sam_nonzero] + sam_id_offset
@@ -158,9 +131,9 @@ def main():
     print(f"[INFO] gray output dir : {out_gray_dir}")
     print(f"[INFO] vis  output dir : {out_vis_dir}")
 
-    # 先在整个 gml_mask 下统计最大 ID，给 SAM 做全局偏移
-    global_max_gml_id = compute_global_gml_max_id(gml_dir)
-    sam_id_offset = global_max_gml_id
+    # 不再统计 GML 的最大 ID，直接统一给 SAM 偏移 10000
+    sam_id_offset = 10000
+    print(f"[INFO] Using fixed SAM id offset: {sam_id_offset}")
 
     # 遍历 sam_mask 文件夹，用相同文件名在 gml_mask 里找
     sam_files = sorted(os.listdir(sam_dir))

@@ -1,13 +1,15 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Gaga 语义高斯可视化 GUI（DearPyGUI 版）
+Gaga 语义高斯可视化 GUI（DearPyGUI 版，带层级语义交互）
 
 用法示例：
     python semantic_gui_dpg.py \
         -s data/scene_name \
         --model_path output/scene_name \
-        --iteration 10000
+        --iteration 10000 \
+        --gui_width 1024 \
+        --gui_height 768
 
 依赖：
     pip install dearpygui
@@ -185,7 +187,8 @@ class SemanticGaussianGUI:
                  classifier: torch.nn.Module = None,
                  num_classes: int = 0,
                  inverse_lookup: torch.Tensor = None,
-                 train_cam: Camera = None,
+                 grayid_to_cityobject: dict = None,
+                 city_semantics: dict = None,
                  width: int = 800,
                  height: int = 600,
                  radius: float = 2.0):
@@ -199,6 +202,11 @@ class SemanticGaussianGUI:
         # new_id -> old_id（原始灰度值），形状 [num_classes]
         self.inverse_lookup = inverse_lookup  # torch.long, on device
 
+        # 原始灰度 id -> CityObject ID（model_path/id_mapping.json）
+        self.grayid_to_cityobject = grayid_to_cityobject or {}
+        # CityObject ID -> 语义信息（city_semantics.json）
+        self.city_semantics = city_semantics or {}
+
         self.width = width
         self.height = height
         self.window_width = width
@@ -206,9 +214,17 @@ class SemanticGaussianGUI:
 
         self.camera = OrbitCamera(self.width, self.height, r=radius)
 
-        # 训练相机（DJI_20241217101307_0006_D 对应的视角）
-        self.train_cam = train_cam
+        # Orbit / Train camera 切换
         self.use_train_cam = False  # 是否使用训练相机视角
+
+        # 收集所有训练相机
+        self.train_cameras = []
+        self.train_cam_names = []
+        for idx, cam in enumerate(self.scene.getTrainCameras()):
+            name = getattr(cam, "image_name", None) or f"cam_{idx}"
+            self.train_cameras.append(cam)
+            self.train_cam_names.append(f"{idx}: {name}")
+        self.active_train_cam_idx = 0
 
         # 记录用于 Reset View 的初始值（Orbit 模式）
         self.init_center = self.camera.center.copy()
@@ -226,9 +242,30 @@ class SemanticGaussianGUI:
         self.label_H = None
         self.label_W = None
 
-        # 当前选中的实例（紧凑 id + 原始灰度 id）
-        self.selected_new_id = None     # 紧凑 id（classifier 输出）
+        # 选中状态：紧凑 id + 原始灰度 id + CityObject id
+        self.selected_new_id = None     # 紧凑 id（只内部用来记忆，被高亮集合替代）
         self.selected_orig_id = None    # 原始灰度 id（灰度图灰度值）
+        self.selected_cityobject_id = None
+        self.selected_semantic_info = None
+
+        # 层级选择
+        self.mask_level = 0  # 0 = 当前对象（叶子），1 = 父，2 = 父的父 ...
+        self.current_hierarchy_chain = None  # [leaf, parent, parent_of_parent, ...]
+        self.highlight_gray_ids = None       # 用于高亮的灰度 id 集合
+
+        # 基于 city_semantics 和 grayid_to_cityobject 构建父子关系与灰度聚合
+        self.city_children = {}       # parent_id -> [child_ids]
+        self.city_to_grayids = {}     # city_id  -> [gray_ids]
+        self.city_descendants_cache = {}
+
+        for cid, data in (self.city_semantics or {}).items():
+            parent = data.get("parent", None)
+            if parent is not None:
+                self.city_children.setdefault(parent, []).append(cid)
+
+        for gid, cid in (self.grayid_to_cityobject or {}).items():
+            self.city_to_grayids.setdefault(cid, []).append(gid)
+
         self.highlight_color = np.array([1.0, 0.0, 0.0], dtype=np.float32)  # 高亮颜色（红）
         self.highlight_alpha = 0.6      # 叠加权重
 
@@ -264,6 +301,129 @@ class SemanticGaussianGUI:
         except Exception as e:
             print(f"[GUI] set_initial_center 失败: {e}")
 
+    # --------- 给 UI 用的简单封装 ---------
+    def set_render_mode(self, mode: str):
+        self.mode = mode
+
+    def reset_view_orbit(self):
+        self.camera.center = self.init_center.copy()
+        self.camera.radius = float(self.init_radius)
+        self.use_train_cam = False
+        print("[GUI] 视角已重置到 Orbit 初始视角")
+
+    def set_use_train_cam(self, flag: bool):
+        self.use_train_cam = bool(flag)
+        print(f"[GUI] 使用训练相机: {self.use_train_cam}")
+
+    def zoom_step(self, delta: int):
+        # delta>0 = 拉远, delta<0 = 拉近
+        self.camera.scale(delta)
+
+    def orbit_step(self, dx_deg: float, dy_deg: float):
+        # 简单用 dx, dy 控制绕场景的旋转
+        self.camera.orbit(dx_deg, dy_deg)
+
+    def pan_step(self, dx: float, dy: float):
+        self.camera.pan(dx, dy)
+
+    def on_select_train_cam(self, display_name: str):
+        """
+        display_name 类似 '0: DJI_2024_...'，解析前面的 index。
+        """
+        try:
+            idx_str = display_name.split(":", 1)[0]
+            idx = int(idx_str)
+        except Exception:
+            print(f"[GUI] 解析训练相机索引失败: {display_name}")
+            return
+
+        if 0 <= idx < len(self.train_cameras):
+            self.active_train_cam_idx = idx
+            self.use_train_cam = True
+            print(f"[GUI] 切换到训练相机 #{idx}: {display_name}")
+        else:
+            print(f"[GUI] 训练相机索引越界: {idx}")
+
+    def set_mask_level(self, level: int):
+        self.mask_level = max(0, int(level))
+        print(f"[GUI] 更新 mask 层级: {self.mask_level}")
+        # 如果当前已经有 selection，则重新根据层级更新高亮
+        self._update_highlight_from_current_selection()
+
+    def search_and_focus(self, query: str):
+        # 预留：现在先简单打印
+        if not query:
+            print("[GUI] search_and_focus: 空查询")
+            return
+        print(f"[GUI] [TODO] search_and_focus: {query}")
+
+    def clear_selection(self):
+        self.selected_new_id = None
+        self.selected_orig_id = None
+        self.selected_cityobject_id = None
+        self.selected_semantic_info = None
+        self.current_hierarchy_chain = None
+        self.highlight_gray_ids = None
+
+        dpg.set_value("_building_info_text", "No building selected.")
+        dpg.set_value("_selection_info_text", "No selection yet.")
+
+    # ------- 层级/高亮相关内部工具 -------
+
+    def _get_hierarchy_chain(self, leaf_city_id: str):
+        """从叶子一直往 parent 走，得到 [leaf, parent, parent_of_parent, ...]"""
+        if leaf_city_id is None or leaf_city_id not in self.city_semantics:
+            return None
+
+        chain = []
+        visited = set()
+        cid = leaf_city_id
+        while cid is not None and cid not in visited:
+            chain.append(cid)
+            visited.add(cid)
+            data = self.city_semantics.get(cid, {})
+            cid = data.get("parent", None)
+        return chain  # leaf -> root
+
+    def _get_descendants(self, cid: str):
+        """得到 cid 的所有子孙节点（不含自身），用 DFS + cache。"""
+        if cid in self.city_descendants_cache:
+            return self.city_descendants_cache[cid]
+
+        res = set()
+        for child in self.city_children.get(cid, []):
+            res.add(child)
+            res |= self._get_descendants(child)
+        self.city_descendants_cache[cid] = res
+        return res
+
+    def _update_highlight_for_cityobject(self, city_id: str):
+        """根据一个 city_id，计算需要高亮的 gray_id 集合（自己 + 所有子孙）"""
+        if city_id is None:
+            self.highlight_gray_ids = None
+            return
+
+        all_cities = {city_id}
+        all_cities |= self._get_descendants(city_id)
+
+        gray_ids = set()
+        for cid in all_cities:
+            for gid in self.city_to_grayids.get(cid, []):
+                gray_ids.add(gid)
+
+        self.highlight_gray_ids = gray_ids if gray_ids else None
+
+    def _update_highlight_from_current_selection(self):
+        """
+        当 mask_level 改变时，如果已经有 current_hierarchy_chain，
+        重新计算要高亮的层级。
+        """
+        if not self.current_hierarchy_chain:
+            return
+        level = min(self.mask_level, len(self.current_hierarchy_chain) - 1)
+        target_city = self.current_hierarchy_chain[level]
+        self._update_highlight_for_cityobject(target_city)
+
     # ----------------- DPG 注册 -----------------
     def register_dpg(self):
         # 注册纹理
@@ -282,7 +442,7 @@ class SemanticGaussianGUI:
 
         dpg.set_primary_window("_primary_window", True)
 
-        # 控制窗口：模式切换等
+        # 控制窗口：顶部对象信息 + 折叠面板
         with dpg.window(
             label="Control",
             tag="_control_window",
@@ -290,67 +450,160 @@ class SemanticGaussianGUI:
             height=400,
             pos=[self.window_width + 10, 0],
         ):
-            dpg.add_text("Mouse position: ", tag="pos_item")
-
-            def mode_changed(sender, app_data):
-                self.mode = app_data
-
-            dpg.add_radio_button(
-                items=["RGB", "Segmentation", "Overlay"],
-                default_value="RGB",
-                label="Render Mode",
-                callback=mode_changed,
-                tag="_mode_radio",
+            # 顶部：对象信息（固定，不可折叠）
+            dpg.add_text("🏠 Building Info")
+            dpg.add_input_text(
+                tag="_building_info_text",
+                multiline=True,
+                readonly=True,
+                default_value="No building selected.",
+                width=300,
+                height=110,
             )
 
-            if self.classifier is None:
-                dpg.add_text("\n[提示] 未加载 classifier.pth，仅支持 RGB。")
+            dpg.add_spacer(height=4)
+            dpg.add_text("🎯 Selection Info")
+            dpg.add_input_text(
+                tag="_selection_info_text",
+                multiline=True,
+                readonly=True,
+                default_value="No selection yet.",
+                width=300,
+                height=80,
+            )
 
-            # Reset View 按钮：回到初始对焦视角（Orbit 模式）
-            def reset_view_callback():
-                self.camera.center = self.init_center.copy()
-                self.camera.radius = float(self.init_radius)
-                self.use_train_cam = False
-                print("[GUI] 视角已重置到 Orbit 初始视角")
-
-            dpg.add_spacing(count=2)
-            dpg.add_button(label="Reset View (Orbit)", callback=lambda: reset_view_callback())
-
-            # 如果有训练相机（DJI_20241217101307_0006_D）的话，提供切换按钮
-            if self.train_cam is not None:
-                dpg.add_spacing(count=2)
-                dpg.add_text("Debug Views (Train Camera):")
-
-                def use_train_cam_callback():
-                    self.use_train_cam = True
-                    print("[GUI] 切换到训练相机视角: DJI_20241217101307_0006_D")
-
-                def use_orbit_cam_callback():
-                    self.use_train_cam = False
-                    print("[GUI] 切换回 Orbit 相机视角")
-
+            with dpg.group(horizontal=True):
                 dpg.add_button(
-                    label="Use DJI_20241217101307_0006_D View",
-                    callback=lambda: use_train_cam_callback()
+                    label="Clear Selection",
+                    callback=lambda: self.clear_selection()
+                )
+
+            dpg.add_separator()
+
+            # ========== 折叠面板 1：View & Camera ==========
+            with dpg.collapsing_header(label="1. View & Camera", default_open=True):
+                # 渲染模式
+                dpg.add_text("Render Mode")
+                dpg.add_radio_button(
+                    items=["RGB", "Segmentation", "Overlay"],
+                    default_value=self.mode,
+                    callback=lambda s, a: self.set_render_mode(a),
+                    tag="_mode_radio",
+                )
+
+                dpg.add_spacer(height=4)
+                dpg.add_separator()
+
+                # Orbit 相机控制
+                dpg.add_text("Orbit Camera")
+
+                with dpg.group(horizontal=True):
+                    dpg.add_button(
+                        label="Reset View",
+                        callback=lambda: self.reset_view_orbit(),
+                    )
+                    dpg.add_button(
+                        label="Use Orbit",
+                        callback=lambda: self.set_use_train_cam(False),
+                    )
+
+                dpg.add_spacer(height=2)
+                with dpg.group(horizontal=True):
+                    dpg.add_button(
+                        label="Zoom In",
+                        callback=lambda: self.zoom_step(-1),
+                        width=70,
+                    )
+                    dpg.add_button(
+                        label="Zoom Out",
+                        callback=lambda: self.zoom_step(+1),
+                        width=70,
+                    )
+
+                with dpg.group(horizontal=True):
+                    dpg.add_button(
+                        label="↑ Tilt Up",
+                        callback=lambda: self.orbit_step(0, -10),
+                        width=80,
+                    )
+                    dpg.add_button(
+                        label="↓ Tilt Down",
+                        callback=lambda: self.orbit_step(0, +10),
+                        width=80,
+                    )
+
+                with dpg.group(horizontal=True):
+                    dpg.add_button(
+                        label="← Pan Left",
+                        callback=lambda: self.pan_step(-10, 0),
+                        width=80,
+                    )
+                    dpg.add_button(
+                        label="→ Pan Right",
+                        callback=lambda: self.pan_step(+10, 0),
+                        width=80,
+                    )
+
+                dpg.add_spacer(height=4)
+                dpg.add_separator()
+
+                # Train Cameras
+                dpg.add_text("Train Cameras")
+
+                if self.train_cam_names:
+                    dpg.add_combo(
+                        label="Camera View",
+                        items=self.train_cam_names,
+                        default_value=self.train_cam_names[self.active_train_cam_idx],
+                        callback=lambda s, a: self.on_select_train_cam(a),
+                        width=280,
+                        tag="_train_cam_combo",
+                    )
+
+                    dpg.add_checkbox(
+                        label="Use Train Camera",
+                        default_value=self.use_train_cam,
+                        callback=lambda s, a: self.set_use_train_cam(a),
+                    )
+                else:
+                    dpg.add_text("No train cameras found.", color=(200, 200, 200))
+
+            dpg.add_separator()
+
+            # ========== 折叠面板 2：交互状态 ==========
+            with dpg.collapsing_header(label="2. Interaction State", default_open=True):
+                dpg.add_text("Mouse position: ", tag="pos_item")
+
+                dpg.add_spacer(height=4)
+                dpg.add_text("Hierarchy / Mask Level")
+                dpg.add_text("0 = 当前对象, 1 = 父, 2 = 父的父 ...")
+
+                dpg.add_slider_int(
+                    label="Mask Level",
+                    tag="_mask_level_slider",
+                    default_value=self.mask_level,
+                    min_value=0,
+                    max_value=5,
+                    callback=lambda s, a: self.set_mask_level(a),
+                    width=280,
+                )
+
+            dpg.add_separator()
+
+            # ========== 折叠面板 3：Search（预留） ==========
+            with dpg.collapsing_header(label="3. Search (Reserved)", default_open=False):
+                dpg.add_text("Search panel is reserved for future use.")
+                dpg.add_input_text(
+                    label="Search CityObject ID / name",
+                    tag="_search_input",
+                    width=250,
                 )
                 dpg.add_button(
-                    label="Use Orbit Camera View",
-                    callback=lambda: use_orbit_cam_callback()
+                    label="Search & Focus (TODO)",
+                    callback=lambda: self.search_and_focus(
+                        dpg.get_value("_search_input")
+                    ),
                 )
-            else:
-                dpg.add_spacing(count=2)
-                dpg.add_text("未找到 DJI_20241217101307_0006_D 的训练相机")
-
-            # 显示当前选中的原始灰度 id + 紧凑 id
-            dpg.add_spacing(count=2)
-            dpg.add_text("Selected Original ID: None (compact: None)", tag="_selected_id_text")
-
-            def clear_selection_callback():
-                self.selected_new_id = None
-                self.selected_orig_id = None
-                dpg.set_value("_selected_id_text", "Selected Original ID: None (compact: None)")
-
-            dpg.add_button(label="Clear Selection", callback=lambda: clear_selection_callback())
 
         # 全局无 padding 主题（避免滚动条）
         with dpg.theme() as theme_no_padding:
@@ -409,7 +662,7 @@ class SemanticGaussianGUI:
             xy = dpg.get_mouse_pos(local=False)
             dpg.set_value("pos_item", f"Mouse position = ({xy[0]:.1f}, {xy[1]:.1f})")
 
-        # 点击拾取：右键点击，选中该像素的紧凑 id，并映射到原始灰度 id
+        # 点击拾取：右键点击，选中该像素，映射层级，并更新 Building/Selection 信息 + 高亮
         def pick_instance_id():
             # 没有 label_map 或没有 classifier 时，没法选
             if self.label_map_compact is None:
@@ -437,7 +690,9 @@ class SemanticGaussianGUI:
                 x_src = max(0, min(self.label_W - 1, x_src))
                 y_src = max(0, min(self.label_H - 1, y_src))
 
+                # 紧凑 id
                 new_id = int(self.label_map_compact[y_src, x_src])
+                # 原始灰度 id
                 if self.label_map_orig is not None:
                     orig_id = int(self.label_map_orig[y_src, x_src])
                 else:
@@ -446,13 +701,73 @@ class SemanticGaussianGUI:
                 self.selected_new_id = new_id
                 self.selected_orig_id = orig_id
 
-                dpg.set_value(
-                    "_selected_id_text",
-                    f"Selected Original ID: {orig_id} (compact: {new_id})"
-                )
+                # 叶子 cityobject（最底层对象，灰度 id -> cityobject id）
+                leaf_city_id = self.grayid_to_cityobject.get(orig_id, None)
+                building_id = None
+
+                # 1. 计算 hierarchy chain
+                if leaf_city_id is not None:
+                    chain = self._get_hierarchy_chain(leaf_city_id)
+                    self.current_hierarchy_chain = chain
+
+                    if chain:
+                        # 按 slider 的层级选中一个 cityobject 用于 mask
+                        level = min(self.mask_level, len(chain) - 1)
+                        target_city = chain[level]
+                    else:
+                        target_city = leaf_city_id
+                else:
+                    chain = None
+                    self.current_hierarchy_chain = None
+                    target_city = None
+
+                # 2. 找到所属建筑（chain 里第一个 type == 'Building' 的对象）
+                if leaf_city_id is not None and leaf_city_id in self.city_semantics:
+                    cid = leaf_city_id
+                    while cid is not None:
+                        data = self.city_semantics.get(cid, {})
+                        if data.get("type", "") == "Building":
+                            building_id = cid
+                            break
+                        cid = data.get("parent", None)
+
+                # 3. 更新高亮（target_city：根据层级 slider 选出来的层级）
+                self._update_highlight_for_cityobject(target_city)
+
+                # 4. 更新 GUI 顶部信息面板
+                # 建筑信息板块
+                if building_id is not None:
+                    bdata = self.city_semantics.get(building_id, {})
+                    attrs = bdata.get("attributes", {}) or {}
+                    lines = [
+                        f"Building ID: {building_id}",
+                        f"Height: {attrs.get('measuredHeight', 'N/A')}",
+                        f"Storeys: {attrs.get('storeysAboveGround', 'N/A')}",
+                        f"Function: {attrs.get('function', 'N/A')}",
+                        f"RoofType: {attrs.get('roofType', 'N/A')}",
+                    ]
+                    dpg.set_value("_building_info_text", "\n".join(lines))
+                else:
+                    dpg.set_value("_building_info_text", "No building info for this selection.")
+
+                # 选取物体板块（根据当前层级 target_city）
+                if target_city is not None:
+                    sdata = self.city_semantics.get(target_city, {})
+                    slines = [
+                        f"Object ID: {target_city}",
+                        f"Type: {sdata.get('type', 'N/A')}",
+                        f"Gray ID (clicked): {orig_id}",
+                        f"Mask Level: {self.mask_level}",
+                    ]
+                    dpg.set_value("_selection_info_text", "\n".join(slines))
+                else:
+                    dpg.set_value("_selection_info_text", f"No semantic object for gray id {orig_id}.")
+
                 print(
                     f"[GUI] Click pick: gui_pixel=({ix_gui}, {iy_gui}), "
-                    f"src_pixel=({x_src}, {y_src}), compact_id={new_id}, orig_id={orig_id}"
+                    f"src_pixel=({x_src}, {y_src}), "
+                    f"compact_id={new_id}, gray_id={orig_id}, leaf_city={leaf_city_id}, "
+                    f"target_city={target_city}, building_id={building_id}"
                 )
             else:
                 # 点在图像外，就不处理
@@ -467,7 +782,7 @@ class SemanticGaussianGUI:
             dpg.add_mouse_move_handler(callback=lambda s, a, u: move_handler(s, a, u))
             dpg.add_mouse_click_handler(callback=change_pos)
 
-            # 右键点击：拾取当前像素的实例/类别 id
+            # 右键点击：拾取当前像素
             dpg.add_mouse_click_handler(
                 button=dpg.mvMouseButton_Right,
                 callback=lambda sender, app_data: pick_instance_id()
@@ -559,9 +874,9 @@ class SemanticGaussianGUI:
         else:
             out = rgb
 
-        # 高亮选中的实例（根据紧凑 id mask）
-        if (self.selected_new_id is not None) and (self.label_map_compact is not None):
-            mask = (self.label_map_compact == int(self.selected_new_id))
+        # 高亮选中的对象（根据灰度 id 集合）
+        if (self.highlight_gray_ids is not None) and (self.label_map_orig is not None):
+            mask = np.isin(self.label_map_orig, list(self.highlight_gray_ids))
             if mask.any():
                 out = out.copy()
                 alpha_h = float(self.highlight_alpha)
@@ -581,8 +896,8 @@ class SemanticGaussianGUI:
     def render_loop(self):
         while dpg.is_dearpygui_running():
             if self.load_model:
-                if self.use_train_cam and self.train_cam is not None:
-                    cam = self.train_cam
+                if self.use_train_cam and self.train_cameras:
+                    cam = self.train_cameras[self.active_train_cam_idx]
                 else:
                     cam = self.construct_camera()
                 self.fetch_and_render(cam)
@@ -645,12 +960,13 @@ def main():
     num_classes = 0
     inverse_lookup = None
 
-    # ========= 从 id_mapping.json 构建 new_id -> old_id 的查表 =========
+    # ========= 从训练用 id_mapping.json 构建 new_id -> old_id =========
+    # 这个在 dataset.source_path / dataset.object_path 下：old_id(灰度) -> new_id(紧凑)
     try:
         matched_mask_path = os.path.join(dataset.source_path, dataset.object_path)
-        id_map_path = os.path.join(matched_mask_path, "id_mapping.json")
-        if os.path.exists(id_map_path):
-            with open(id_map_path, "r") as f:
+        train_id_map_path = os.path.join(matched_mask_path, "id_mapping.json")
+        if os.path.exists(train_id_map_path):
+            with open(train_id_map_path, "r") as f:
                 raw_id_map = json.load(f)
             id_map = {int(k): int(v) for k, v in raw_id_map.items()}  # old_id -> new_id
 
@@ -660,21 +976,21 @@ def main():
                 max_new_id = 0
 
             num_classes = max_new_id + 1  # 背景0 + K个前景
-            print(f"[GUI] Loaded id_mapping.json from {id_map_path}")
+            print(f"[GUI] Loaded train id_mapping.json from {train_id_map_path}")
             print(f"[GUI] num_classes (with background) = {num_classes}")
 
-            # new_id -> old_id 查表（tensor，和 render_sets 一致）
+            # new_id -> old_id 查表（tensor）
             inverse_lookup = torch.zeros(num_classes, dtype=torch.long, device=device)
             inverse_lookup[0] = 0
             for old_id, new_id in id_map.items():
                 if 0 <= new_id < num_classes:
                     inverse_lookup[new_id] = int(old_id)
         else:
-            print(f"[GUI] 未找到 id_mapping.json：{id_map_path}，将无法精确映射回原始灰度 id")
+            print(f"[GUI] 未找到训练用 id_mapping.json：{train_id_map_path}，将无法精确映射回原始灰度 id")
             num_classes = 0
             inverse_lookup = None
     except Exception as e:
-        print(f"[GUI] 读取 id_mapping.json 失败: {e}")
+        print(f"[GUI] 读取训练用 id_mapping.json 失败: {e}")
         num_classes = 0
         inverse_lookup = None
 
@@ -708,26 +1024,50 @@ def main():
         if loaded_iter is None:
             print("[GUI] Scene 未加载任何 iteration，无法加载 classifier；仅显示 RGB。")
         elif num_classes == 0:
-            print("[GUI] num_classes=0（可能缺少 id_mapping.json），无法构造 classifier；仅显示 RGB。")
+            print("[GUI] num_classes=0（可能缺少训练 id_mapping.json），无法构造 classifier；仅显示 RGB。")
 
-    # ========= 在训练相机中寻找 DJI_20241217101307_0006_D 的视角 =========
-    target_train_cam = None
-    target_basename = "DJI_20241217101307_0006_D"
-    for cam in scene.getTrainCameras():
-        name = getattr(cam, "image_name", None)
-        if name is None:
-            continue
-        # render_set 里保存是 f"{view.image_name}.png"，所以这里匹配 basename
-        if name == target_basename or name == target_basename + ".png":
-            target_train_cam = cam
-            break
+    # ========= 从 model_path 读取 city_semantics.json 和 id_mapping.json（灰度 id -> CityObject id） =========
+    grayid_to_cityobject = {}
+    city_semantics = {}
 
-    if target_train_cam is not None:
-        print(f"[GUI] 找到训练相机视角: image_name={target_train_cam.image_name}")
-    else:
-        print("[GUI] 未在训练相机中找到 DJI_20241217101307_0006_D，对应的 debug 按钮会禁用。")
+    model_path = dataset.model_path
+    sem_path = os.path.join(model_path, "city_semantics.json")
+    gray_id_map_path = os.path.join(model_path, "id_mapping.json")
 
-    # 自动根据高 opacity 高斯估计一个“主体中心”和半径，避免被噪点干扰（Orbit 初始视角）
+    # city_semantics.json: CityObject ID -> 语义信息
+    try:
+        if os.path.exists(sem_path):
+            with open(sem_path, "r", encoding="utf-8") as f:
+                city_semantics = json.load(f)
+            print(f"[GUI] Loaded city_semantics.json from {sem_path} "
+                  f"(num objects = {len(city_semantics)})")
+        else:
+            print(f"[GUI] 未找到 city_semantics.json：{sem_path}")
+    except Exception as e:
+        print(f"[GUI] 读取 city_semantics.json 失败: {e}")
+        city_semantics = {}
+
+    # model_path/id_mapping.json: 灰度 id(原始) -> CityObject ID
+    try:
+        if os.path.exists(gray_id_map_path):
+            with open(gray_id_map_path, "r", encoding="utf-8") as f:
+                raw_gray_id_map = json.load(f)
+            for k, v in raw_gray_id_map.items():
+                try:
+                    gid = int(k)           # 灰度 id
+                except ValueError:
+                    print(f"[GUI] model_path/id_mapping.json 的键无法转换为 int: {k}")
+                    continue
+                grayid_to_cityobject[gid] = str(v)   # CityObject ID
+            print(f"[GUI] Loaded gray-id->cityobject id_mapping.json from {gray_id_map_path} "
+                  f"(num mapped ids = {len(grayid_to_cityobject)})")
+        else:
+            print(f"[GUI] 未找到 model_path/id_mapping.json：{gray_id_map_path}，CityObject 映射将不可用。")
+    except Exception as e:
+        print(f"[GUI] 读取 model_path/id_mapping.json 失败: {e}")
+        grayid_to_cityobject = {}
+
+    # 自动根据高 opacity 高斯估计一个“主体中心”和半径（Orbit 初始视角）
     focus_center, focus_radius = estimate_focus_from_gaussians(gaussians)
 
     # 根据场景大小估计一个合适的初始半径
@@ -748,7 +1088,8 @@ def main():
         classifier=classifier,
         num_classes=num_classes,
         inverse_lookup=inverse_lookup,
-        train_cam=target_train_cam,
+        grayid_to_cityobject=grayid_to_cityobject,
+        city_semantics=city_semantics,
         width=args.gui_width,
         height=args.gui_height,
         radius=init_radius,
