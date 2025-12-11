@@ -3,7 +3,9 @@ import math
 import numpy as np
 import torch
 import torch.nn.functional as F
+import os
 
+from instance_query import InstanceQueryEngine
 import dearpygui.dearpygui as dpg
 from typing import Optional
 from gaussian_renderer import render
@@ -35,6 +37,7 @@ class SemanticGaussianGUI:
         width: int = 800,
         height: int = 600,
         radius: float = 2.0,
+        model_root: Optional[str] = None,
     ):
         self.scene = scene
         self.gaussians = gaussians
@@ -89,6 +92,43 @@ class SemanticGaussianGUI:
             function_map=building_function_map,
             rooftype_map=building_rooftype_map,
         )
+
+        # 语义查询引擎（CityGML + CLIP）
+        self.query_engine: Optional[InstanceQueryEngine] = None
+        self.model_root = model_root
+
+        if self.model_root is not None:
+            id_mapping_path = os.path.join(self.model_root, "id_mapping.json")
+            city_semantics_path = os.path.join(self.model_root, "city_semantics.json")
+            clip_index_path = os.path.join(self.model_root, "object_clip_index.npz")
+
+            if os.path.exists(id_mapping_path) and os.path.exists(city_semantics_path):
+                if os.path.exists(clip_index_path):
+                    try:
+                        print(f"[GUI] 初始化 InstanceQueryEngine: {id_mapping_path}, {city_semantics_path}, {clip_index_path}")
+                        self.query_engine = InstanceQueryEngine(
+                            id_mapping_path=id_mapping_path,
+                            city_semantics_path=city_semantics_path,
+                            object_clip_index_path=clip_index_path,
+                            device=device,
+                        )
+                        print("[GUI] Query engine ready (CityGML + CLIP).")
+                    except Exception as e:
+                        print(f"[GUI] 初始化 Query engine 失败: {e}")
+                else:
+                    try:
+                        # 只有 CityGML 的简单版本：你可以做一个只读 CityGML 的 mini engine，
+                        # 或者暂时只打印提示
+                        print("[GUI] 未找到 object_clip_index.npz，只能用 CityGML type 查询。")
+                        self.query_engine = InstanceQueryEngine(
+                            id_mapping_path=id_mapping_path,
+                            city_semantics_path=city_semantics_path,
+                            object_clip_index_path=clip_index_path,  # 如果没有可以不建，或者自己写个 CityGML-only 版本
+                        )
+                    except Exception as e:
+                        print(f"[GUI] 初始化 CityGML-only Query engine 失败: {e}")
+            else:
+                print("[GUI] Query engine 所需的 id_mapping.json / city_semantics.json 不存在，查询功能不可用。")
 
         # 高亮参数
         self.highlight_color = np.array([1.0, 0.0, 0.0], dtype=np.float32)
@@ -176,6 +216,60 @@ class SemanticGaussianGUI:
         self.hierarchy.clear_selection()
         dpg.set_value("_building_info_text", "No building selected.")
         dpg.set_value("_selection_info_text", "No selection yet.")
+
+    def run_text_query(self):
+        # 1. 检查前置条件
+        if self.query_engine is None:
+            print("[GUI] Query engine 未初始化（缺少 id_mapping / city_semantics / CLIP 索引？）")
+            return
+
+        desc = dpg.get_value("_query_description_input").strip()
+        if not desc:
+            print("[GUI] run_text_query: 空描述")
+            return
+
+        if self.label_map_orig is None:
+            print("[GUI] 当前视图还没有 label_map_orig（可能没跑 classifier？），无法查询。")
+            return
+
+        thr = dpg.get_value("_query_threshold_slider")
+        inst_img = self.label_map_orig.astype(np.int32)
+
+        try:
+            mask, heatmap, route = self.query_engine.query_image_auto(
+                instance_img=inst_img,
+                description=desc,
+                similarity_threshold=float(thr),
+            )
+        except Exception as e:
+            print(f"[GUI] Query 出错: {e}")
+            return
+
+        # 2. 从 mask 中找出所有匹配的 instance（灰度 id）
+        selected_ids = np.unique(inst_img[mask.astype(bool)])
+        selected_ids = selected_ids[selected_ids != 0]  # 去掉背景 0
+
+        # 3. 更新高亮集合（用灰度 id）
+        if selected_ids.size == 0:
+            self.hierarchy.highlight_gray_ids = None
+            dpg.set_value(
+                "_selection_info_text",
+                f"No match for query: '{desc}' (route={route})",
+            )
+            print(f"[GUI] Query '{desc}' via {route}: no matched instances.")
+            return
+
+        self.hierarchy.highlight_gray_ids = set(int(i) for i in selected_ids)
+
+        # 4. 更新右侧信息栏（不选具体一个 object，而是显示查询统计）
+        info_text = "\n".join([
+            f"Query: {desc}",
+            f"Route: {route}",
+            f"Matched instances: {len(selected_ids)}",
+        ])
+        dpg.set_value("_selection_info_text", info_text)
+
+        print(f"[GUI] Query '{desc}' via {route}: highlighted {len(selected_ids)} instances.")
 
     # ---------- DearPyGUI 注册 ----------
     def register_dpg(self):
@@ -355,23 +449,29 @@ class SemanticGaussianGUI:
                 callback=lambda s, a: self.set_mask_level(a),
                 width=280,
             )
-
             dpg.add_separator()
             dpg.add_spacer(height=4)
 
-            # --- Search 部分 ---
-            dpg.add_text("Search (Reserved)")
+            # --- Semantic Query ---
+            dpg.add_text("Semantic Query (CityGML / CLIP)")
             dpg.add_input_text(
-                label="Search CityObject ID / name",
-                tag="_search_input",
-                width=250,
+                label="Description",
+                tag="_query_description_input",
+                width=RIGHT_PANEL_WIDTH - 60,   # 或者固定 260
+            )
+            dpg.add_slider_float(
+                label="Similarity Threshold (CLIP)",
+                tag="_query_threshold_slider",
+                default_value=0.6,
+                min_value=0.0,
+                max_value=1.0,
+                width=RIGHT_PANEL_WIDTH - 60,
             )
             dpg.add_button(
-                label="Search & Focus (TODO)",
-                callback=lambda: self.search_and_focus(
-                    dpg.get_value("_search_input")
-                ),
+                label="Run Query & Highlight",
+                callback=lambda: self.run_text_query(),
             )
+
 
 
         # 去 padding

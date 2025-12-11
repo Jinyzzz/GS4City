@@ -226,6 +226,7 @@ def main():
         width=args.gui_width,
         height=args.gui_height,
         radius=init_radius,
+        model_root=dataset.model_path,   
     )
 
     gui.set_initial_center(focus_center, radius=init_radius)
