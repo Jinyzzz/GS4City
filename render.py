@@ -6,27 +6,34 @@
 # Modified from codes in Gaussian-Splatting 
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 
+import os
+import sys
+import json
+import colorsys
+
 import torch
 torch.backends.cudnn.enabled = False
-from scene import Scene
-import os
+
+from PIL import Image
 from tqdm import tqdm
 from os import makedirs
-from gaussian_renderer import render
+from argparse import ArgumentParser, Namespace
+
 import torchvision
+import numpy as np
+import cv2
+from sklearn.decomposition import PCA
+
+from scene import Scene
+from gaussian_renderer import render
 from utils.general_utils import safe_state
 from utils.graphics_utils import getWorld2View2
 from utils.pose_utils import generate_ellipse_path, generate_spiral_path
-from argparse import ArgumentParser
-from arguments import ModelParams, PipelineParams, RenderParams, get_combined_args
+from arguments import ModelParams, PipelineParams, RenderParams
 from gaussian_renderer import GaussianModel
-import numpy as np
-from PIL import Image
-import colorsys
-import cv2
-from sklearn.decomposition import PCA
-import json
 
+
+# ============ 渲染工具函数 ============
 
 def feature_to_rgb(features):
     # Input features shape: (C, H, W) or (1, C, H, W)
@@ -225,8 +232,7 @@ def render_set(model_path,
         Image.fromarray(rgb_mask).save(os.path.join(colormask_path, '{}'.format(view.image_name) + ".png"))
 
         if name == "train":
-            # GT 灰度（原始 ID）
-            # 为了不丢 ID，保存成 uint16
+            # GT 灰度（原始 ID）保存成 uint16 不丢 ID
             Image.fromarray(gt_np.astype(np.uint16)).save(
                 os.path.join(gt_object_path, '{}'.format(view.image_name) + ".png")
             )
@@ -358,20 +364,102 @@ def render_sets(dataset: ModelParams, pipeline: PipelineParams, render_params: R
             )
 
 
+# ============ main：只用 output 文件夹名 ============
+
 if __name__ == "__main__":
-    # Set up command line argument parser
-    parser = ArgumentParser(description="Testing script parameters")
-    model = ModelParams(parser, sentinel=True)
-    pipeline = PipelineParams(parser)
-    render_params = RenderParams(parser)
+    """
+    用法示例：
+        cd /workspace/Gaga
+        python render.py \
+            --output_name subset_building1_29_1112 \
+            --iteration 10000 \
+            --render_video
+
+    只需要给 output 下面的文件夹名字，脚本会自动去：
+        ./output/<output_name>/cfg_args
+    里读训练时保存的参数（包括 scene / object_path / resolution 等）。
+    然后：
+        - 强制把 dataset.model_path 设为 ./output/<output_name>
+        - 从这个目录加载 point_cloud 和 classifier.pth
+    """
+
+    # ====== 1. 先解析命令行，只关心渲染相关参数 + output_name ======
+    parser = ArgumentParser(description="Testing (render) script parameters")
+
+    # 这些只是为了把 resolution / skip_train / skip_test / render_video / fps 等参数加到命令行
+    _mp = ModelParams(parser, sentinel=True)
+    _pp = PipelineParams(parser)
+    _rp = RenderParams(parser)
+
     parser.add_argument("--quiet", action="store_true")
-    args = get_combined_args(parser)
-    print("Rendering " + args.model_path)
+    # 新增：只输入 output 目录名（注意：不再加 -o，避免和 object_path 冲突）
+    parser.add_argument(
+        "--output_name",
+        type=str,
+        required=True,
+        help="Name of folder under ./output that contains the trained semantic model."
+    )
 
-    # Temporarily solution
-    args.lift = False
+    args_cmd = parser.parse_args(sys.argv[1:])
 
-    # Initialize system state (RNG)
-    safe_state(args.quiet)
+    # ====== 2. 根据 output_name 拼出绝对路径，并读取 cfg_args ======
+    repo_root = os.path.dirname(os.path.abspath(__file__))
+    output_root = os.path.join(repo_root, "output")
+    output_dir = os.path.join(output_root, args_cmd.output_name)
 
-    render_sets(model.extract(args), pipeline.extract(args), render_params.extract(args))
+    print(f"Rendering from output folder: {output_dir}")
+
+    cfg_path = os.path.join(output_dir, "cfg_args")
+    if not os.path.exists(cfg_path):
+        raise FileNotFoundError(f"cfg_args not found at {cfg_path}")
+
+    print(f"Loading cfg_args from {cfg_path}")
+    with open(cfg_path, "r") as f:
+        cfg_string = f.read()
+    # cfg_args 里本来就是一个 Namespace(...) 的字符串
+    cfg_ns = eval(cfg_string)  # Namespace
+
+    # ====== 3. 合并：cfg_args 里的是默认值，命令行覆盖它 ======
+    merged_dict = vars(cfg_ns).copy()
+    for k, v in vars(args_cmd).items():
+        if k == "output_name":
+            continue
+        # None 不覆盖
+        if v is not None:
+            merged_dict[k] = v
+
+    # 强制使用新的 output_dir 作为 model_path（也就是渲染时的模型目录）
+    merged_dict["model_path"] = os.path.abspath(output_dir)
+
+    # 渲染阶段只需要从 output_dir 读取 point_cloud，不再用 lift 分支
+    merged_dict["lift"] = False
+
+    # 防止 ModelParams.extract 再用 scene/model/output 这些“纯名字”去改路径
+    for key in ("scene", "model", "output"):
+        if key in merged_dict:
+            # 保留 cfg_args 里已经展开好的 source_path / model_path 等，不再用这些名字重算
+            merged_dict[key] = ""
+
+    full_args = Namespace(**merged_dict)
+
+    # ====== 4. 用 dummy parser + ParamGroup.extract 把参数分组成 dataset / pipeline / render ======
+    dummy_parser = ArgumentParser()
+    mp = ModelParams(dummy_parser, sentinel=True)
+    pp = PipelineParams(dummy_parser)
+    rp = RenderParams(dummy_parser)
+
+    dataset_params = mp.extract(full_args)
+    pipeline_params = pp.extract(full_args)
+    render_params = rp.extract(full_args)
+
+    # 再确保一下 model_path 指向 output_dir（保险）
+    dataset_params.model_path = os.path.abspath(output_dir)
+
+    print("Final model_path for rendering:", dataset_params.model_path)
+    print("Source path (dataset):", dataset_params.source_path)
+
+    # 初始化 RNG
+    safe_state(getattr(full_args, "quiet", False))
+
+    # 开始渲染
+    render_sets(dataset_params, pipeline_params, render_params)
