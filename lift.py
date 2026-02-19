@@ -44,7 +44,10 @@ def training(dataset, opt, pipe,
     prepare_output_and_logger(dataset)
 
     # ======== 拷贝语义相关文件到 output/<output>/<scene> ========
-    copy_semantic_files_to_output(dataset)
+    # fused_mask: 完全保持原行为（包含 clip 特征）
+    # sam_mask  : 不再处理 clip 特征
+    use_clip_semantics = (getattr(dataset, "object_path", "") == "fused_mask")
+    copy_semantic_files_to_output(dataset, use_clip_semantics=use_clip_semantics)
 
     # ======== 初始化高斯和场景（从 pretrained 3DGS 加载） ========
     gaussians = GaussianModel(dataset.sh_degree)
@@ -59,14 +62,14 @@ def training(dataset, opt, pipe,
     if len(train_cams) == 0:
         raise RuntimeError(
             "No cameras have 'objects' masks for supervision. "
-            "Check that fused_mask/*.npy are correctly generated and loaded in Scene."
+            "Check that fused_mask/*.npy (or sam_mask/*.npy) are correctly generated and loaded in Scene."
         )
 
     # 读 mask 关联信息（只用于找 object_path）
     matched_mask_path = os.path.join(dataset.source_path, dataset.object_path)
 
     # ===== 全局一致的 mask id -> 紧凑 id 映射（跨视角一致）=====
-    # ⚠️ 注意：这里用的是 fused_mask 目录下的 id_mapping.json（数值 id 映射）
+    # ⚠️ 注意：这里用的是 object_path 目录下的 id_mapping.json（数值 id 映射）
     # scene 根目录那个 id_mapping.json 是 citygml 语义映射，训练阶段不要碰它
     id_map_path = os.path.join(matched_mask_path, "id_mapping.json")
 
@@ -381,12 +384,12 @@ def prepare_output_and_logger(dataset_params):
         cfg_log_f.write(str(Namespace(**vars(dataset_params))))
 
 
-def copy_semantic_files_to_output(dataset_params):
+def copy_semantic_files_to_output(dataset_params, use_clip_semantics: bool = True):
     """
     在 scene 根目录下查找:
       - city_semantics.json
       - id_mapping.json
-      - clip_features_fused.npy
+      - clip_features_fused.npy   (仅在 use_clip_semantics=True 时处理)
     然后复制到:
       <output_root>/<output>/<scene>/ 目录下
     其中 clip_features_fused.npy 重命名为 clip_semantics.npy
@@ -416,13 +419,18 @@ def copy_semantic_files_to_output(dataset_params):
         print(f"[Semantic Copy] id_mapping.json not found in {scene_root}, skip.")
 
     # 3) clip_features_fused.npy  -> clip_semantics.npy
-    src_clip = os.path.join(scene_root, "clip_features_fused.npy")
-    if os.path.exists(src_clip):
-        dst_clip = os.path.join(out_scene_dir, "clip_semantics.npy")
-        shutil.copy2(src_clip, dst_clip)
-        print(f"[Semantic Copy] clip_features_fused.npy -> {dst_clip}")
+    #    仅 fused_mask 路径下保持原行为；sam_mask 时完全不处理 clip 特征
+    if use_clip_semantics:
+        src_clip = os.path.join(scene_root, "clip_features_fused.npy")
+        if os.path.exists(src_clip):
+            dst_clip = os.path.join(out_scene_dir, "clip_semantics.npy")
+            shutil.copy2(src_clip, dst_clip)
+            print(f"[Semantic Copy] clip_features_fused.npy -> {dst_clip}")
+        else:
+            print(f"[Semantic Copy] clip_features_fused.npy not found in {scene_root}, skip.")
     else:
-        print(f"[Semantic Copy] clip_features_fused.npy not found in {scene_root}, skip.")
+        # sam_mask: 不处理 clip 特征（不报错、不复制）
+        pass
 
 
 def training_report(iteration, loss_obj, loss, l1_loss,
@@ -513,7 +521,18 @@ if __name__ == "__main__":
 
     # ====== 通过 ModelParams.extract 生成 dataset_params，并修正路径语义 ======
     dataset_params = lp.extract(args)
-    dataset_params.object_path = "fused_mask"
+
+    # ========= 新增逻辑：优先 fused_mask；否则 sam_mask =========
+    # 要求：fused_mask 存在时，行为完全不变
+    fused_mask_dir = os.path.join(dataset_params.source_path, "fused_mask")
+    if os.path.isdir(fused_mask_dir):
+        dataset_params.object_path = "fused_mask"
+        print(f"[Mask] Using fused_mask: {fused_mask_dir}")
+    else:
+        dataset_params.object_path = "sam_mask"
+        print(f"[Mask] fused_mask not found. Using sam_mask instead: "
+              f"{os.path.join(dataset_params.source_path, 'sam_mask')}")
+    # ========================================================
 
     # 此时：
     #   dataset_params.source_path       = <repo>/dataset/<scene>

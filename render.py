@@ -220,10 +220,17 @@ def render_set(model_path,
         pred_obj_mask = visualize_obj(pred_original_np)
 
         # ---------- GT ----------
+        gt_np = None          # 初始化变量，防止下面报错
+        gt_rgb_mask = None
+        
         if name == "train":
-            gt_objects = view.objects                        # 一般是「原始 ID」
-            gt_np = gt_objects.cpu().numpy().astype(np.int32)
-            gt_rgb_mask = visualize_obj(gt_np)
+            if view.objects is not None:  # <--- 【新增】检查是否存在 mask
+                gt_objects = view.objects
+                gt_np = gt_objects.cpu().numpy().astype(np.int32)
+                gt_rgb_mask = visualize_obj(gt_np)
+            else:
+                # 这是一个混入训练集的 Test 图片，没有 GT
+                pass
 
         # ---------- 特征 PCA 可视化 ----------
         rgb_mask = feature_to_rgb(rendering_obj.squeeze(0))  # 把特征直接做 PCA 可视化
@@ -232,14 +239,15 @@ def render_set(model_path,
         Image.fromarray(rgb_mask).save(os.path.join(colormask_path, '{}'.format(view.image_name) + ".png"))
 
         if name == "train":
-            # GT 灰度（原始 ID）保存成 uint16 不丢 ID
-            Image.fromarray(gt_np.astype(np.uint16)).save(
-                os.path.join(gt_object_path, '{}'.format(view.image_name) + ".png")
-            )
-            # GT 彩色
-            Image.fromarray(gt_rgb_mask).save(
-                os.path.join(gt_colormask_path, '{}'.format(view.image_name) + ".png")
-            )
+            # 只有当 gt_np 不为空时才保存 GT
+            if gt_np is not None:
+                Image.fromarray(gt_np.astype(np.uint16)).save(
+                    os.path.join(gt_object_path, '{}'.format(view.image_name) + ".png")
+                )
+            if gt_rgb_mask is not None:
+                Image.fromarray(gt_rgb_mask).save(
+                    os.path.join(gt_colormask_path, '{}'.format(view.image_name) + ".png")
+                )
 
         # 预测彩色图（原始 ID）
         Image.fromarray(pred_obj_mask).save(

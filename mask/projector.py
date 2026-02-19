@@ -73,6 +73,27 @@ class GaussianProjector(torch.nn.Module):
         scene = Scene(dataset, self.gaussians, load_iteration=iteration, shuffle=False)
         self.gaussians_xyz = self.gaussians.get_xyz.to(self.device)
         self.viewpoint_camera = scene.getTrainCameras()
+        
+        print("\n[DEBUG] ===== dataset/source_path check =====")
+        print("[DEBUG] dataset.source_path =", dataset.source_path)
+        print("[DEBUG] images dir expected =", os.path.join(dataset.source_path, "images"))
+        try:
+            img_dir = os.path.join(dataset.source_path, "images")
+            if os.path.isdir(img_dir):
+                files = sorted(os.listdir(img_dir))
+                print("[DEBUG] images file count =", len(files))
+                print("[DEBUG] images sample =", files[:5])
+            else:
+                print("[DEBUG] images dir does NOT exist")
+        except Exception as e:
+            print("[DEBUG] failed to list images dir:", e)
+
+        print("[DEBUG] train cameras returned =", len(self.viewpoint_camera))
+        if len(self.viewpoint_camera) > 0:
+            v0 = self.viewpoint_camera[0]
+            print("[DEBUG] first camera image_name =", getattr(v0, "image_name", None))
+        print("[DEBUG] =====================================\n")
+
 
         # 几何/分块相关
         self.front_percentage = float(params["front_percentage"])

@@ -69,11 +69,46 @@ class Scene:
             random.shuffle(scene_info.train_cameras)  # Multi-res consistent random shuffling
             random.shuffle(scene_info.test_cameras)  # Multi-res consistent random shuffling
 
-        self.cameras_extent = scene_info.nerf_normalization["radius"]
+        # ======== Auto-Filter: filter by image file existence (NOT cam_info.image) ========
+        print(f"[Auto-Filter] Checking {len(scene_info.train_cameras)} cameras from COLMAP...")
 
+        valid_cameras = []
+        missing_paths = []
+
+        for cam_info in scene_info.train_cameras:
+            # 1) 最优：dataset_readers 通常会给 cam_info.image_path
+            img_path = getattr(cam_info, "image_path", None)
+
+            # 2) 兜底：没有 image_path 就用 source_path + images_folder + image_name 拼
+            if not img_path:
+                img_name = getattr(cam_info, "image_name", None)
+                if img_name is None:
+                    missing_paths.append("<cam_info has no image_name>")
+                    continue
+                img_path = os.path.join(args.source_path, args.images, img_name)
+
+            if os.path.isfile(img_path):
+                valid_cameras.append(cam_info)
+            else:
+                missing_paths.append(img_path)
+
+        removed = len(scene_info.train_cameras) - len(valid_cameras)
+        print(f"[Auto-Filter] Removed {removed} missing images.")
+        print(f"[Auto-Filter] Final training set size: {len(valid_cameras)}")
+        if removed > 0:
+            print("[Auto-Filter] Missing examples (up to 5):")
+            for p in missing_paths[:5]:
+                print("  ", p)
+
+        scene_info.train_cameras[:] = valid_cameras
+        # ================================================================================
+
+
+        # 然后再进入循环
         for resolution_scale in resolution_scales:
             print("Loading Training Cameras")
             self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
+            
             print("Loading Test Cameras")
             self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
         
