@@ -3,7 +3,7 @@
 # All rights reserved.
 #
 # ------------------------------------------------------------------------
-# Modified from codes in Gaussian-Splatting 
+# Modified from codes in Gaussian-Splatting
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 
 import os
@@ -33,10 +33,10 @@ from arguments import ModelParams, PipelineParams, RenderParams
 from gaussian_renderer import GaussianModel
 
 
-# ============ 渲染工具函数 ============
+# ============ Rendering helpers ============
 
 def feature_to_rgb(features):
-    # Input features shape: (C, H, W) or (1, C, H, W)
+    # Input feature shape: (C, H, W) or (1, C, H, W)
 
     H, W = features.shape[-2], features.shape[-1]
 
@@ -49,7 +49,7 @@ def feature_to_rgb(features):
     else:
         raise ValueError(f"Unexpected feature dim: {features.shape}")
 
-    # Apply PCA and get the first 3 components
+    # PCA to 3 components for visualization
     pca = PCA(n_components=3)
     pca_result = pca.fit_transform(features_reshaped.cpu().numpy())
 
@@ -66,21 +66,19 @@ def feature_to_rgb(features):
 
 def id2rgb(id, max_num_obj=256):
     """
-    将整数 ID 映射到一个稳定的颜色。
-    这里不再强制限制 id <= max_num_obj，只要求 id >= 0。
+    Map an integer ID to a stable color.
+    No longer enforces id <= max_num_obj; only requires id >= 0.
     """
     if id < 0:
         raise ValueError("ID should be non-negative")
 
-    # Convert the ID into a hue value
     golden_ratio = 1.6180339887
-    h = ((id * golden_ratio) % 1)           # Ensure value is between 0 and 1
-    s = 0.5 + (id % 2) * 0.5       # Alternate between 0.5 and 1.0
+    h = ((id * golden_ratio) % 1)   # hue in [0, 1)
+    s = 0.5 + (id % 2) * 0.5        # alternate 0.5 / 1.0 saturation
     l = 0.5
 
-    # Use colorsys to convert HSL to RGB
     rgb = np.zeros((3,), dtype=np.uint8)
-    if id == 0:   # invalid region / background
+    if id == 0:  # background / invalid region
         return rgb
     r, g, b = colorsys.hls_to_rgb(h, l, s)
     rgb[0], rgb[1], rgb[2] = int(r * 255), int(g * 255), int(b * 255)
@@ -90,7 +88,7 @@ def id2rgb(id, max_num_obj=256):
 
 def visualize_obj(objects):
     """
-    objects: numpy array, shape [H, W]，里面是对象 ID（这里我们希望是「原始 ID」）
+    objects: numpy array [H, W], values are object IDs (expected to be original IDs)
     """
     rgb_mask = np.zeros((*objects.shape[-2:], 3), dtype=np.uint8)
     all_obj_ids = np.unique(objects)
@@ -111,7 +109,9 @@ def render_video_func(source_path,
                       inverse_lookup,
                       fps=30):
     """
-    渲染视频：左边是原图，右边是「映射回原始 ID 后」再上色的分割结果。
+    Render a video:
+      - left: RGB render
+      - right: segmentation visualization (mapped back to original IDs)
     """
     render_path = os.path.join(model_path, 'video', "ours_{}".format(iteration))
     makedirs(render_path, exist_ok=True)
@@ -136,27 +136,27 @@ def render_video_func(source_path,
         view.camera_center = view.world_view_transform.inverse()[3, :3]
         rendering = render(view, gaussians, pipeline, background)
 
-        # RGB 渲染结果
+        # RGB rendering
         img = torch.clamp(rendering["render"], min=0., max=1.).cpu()  # [3, H, W]
 
-        # 分割特征
-        rendering_obj = rendering["render_seg"]  # 通常 [C, H, W]
+        # Segmentation features
+        rendering_obj = rendering["render_seg"]  # usually [C, H, W]
         if rendering_obj.dim() == 3:
             rendering_obj = rendering_obj.unsqueeze(0)  # -> [1, C, H, W]
 
-        # 分类预测（紧凑 ID）
+        # Predict compact IDs
         logits = classifier(rendering_obj)              # [1, num_classes, H, W]
         pred_compact = torch.argmax(logits, dim=1)[0]  # [H, W], long
 
-        # 映射回「原始 ID」
+        # Map back to original IDs
         pred_original = inverse_lookup[pred_compact]   # [H, W], long
         pred_original_np = pred_original.cpu().numpy().astype(np.int32)
 
-        # 彩色可视化（基于原始 ID）
+        # Color visualization using original IDs
         pred_obj_mask = visualize_obj(pred_original_np) / 255.0
         pred_obj_mask = torch.clamp(torch.tensor(pred_obj_mask), min=0., max=1.).permute(2, 0, 1)
 
-        # 拼图：左边渲染，右边分割可视化
+        # Concatenate: RGB | Seg
         combined_img = torch.cat([img, pred_obj_mask], dim=2)
         torchvision.utils.save_image(combined_img, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         video_img = (combined_img.permute(1, 2, 0).detach().cpu().numpy() * 255.).astype(np.uint8)[..., ::-1]
@@ -175,10 +175,11 @@ def render_set(model_path,
                classifier,
                inverse_lookup):
     """
-    - 保存渲染图
-    - 保存 GT 灰度 + 彩色
-    - 保存预测的「原始 ID」灰度图 + 彩色图
-    - 保存特征 PCA 可视化图
+    Save:
+      - RGB renders
+      - GT masks (gray + color) if available
+      - predicted masks (original IDs: gray + color)
+      - feature PCA visualization
     """
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
     gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
@@ -190,8 +191,8 @@ def render_set(model_path,
         gt_object_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt_objects")
         makedirs(gt_object_path, exist_ok=True)
 
-    pred_obj_path = os.path.join(model_path, name, "ours_{}".format(iteration), "objects_pred")   # 彩色预测
-    test_obj_path = os.path.join(model_path, name, "ours_{}".format(iteration), "objects_test")   # 灰度预测（原始 ID）
+    pred_obj_path = os.path.join(model_path, name, "ours_{}".format(iteration), "objects_pred")   # color predictions
+    test_obj_path = os.path.join(model_path, name, "ours_{}".format(iteration), "objects_test")   # gray predictions (original IDs)
 
     makedirs(render_path, exist_ok=True)
     makedirs(gts_path, exist_ok=True)
@@ -204,42 +205,40 @@ def render_set(model_path,
         rendering = results["render"]
         rendering_obj = results["render_seg"]  # [C, H, W] or [1, C, H, W]
 
-        # 统一成 [1, C, H, W]
+        # Ensure [1, C, H, W]
         if rendering_obj.dim() == 3:
             rendering_obj = rendering_obj.unsqueeze(0)
 
-        # ---------- 预测（紧凑 ID） ----------
+        # ---------- Predict compact IDs ----------
         logits = classifier(rendering_obj)              # [1, num_classes, H, W]
         pred_compact = torch.argmax(logits, dim=1)[0]  # [H, W]
 
-        # ---------- 映射回「原始 ID」 ----------
+        # ---------- Map back to original IDs ----------
         pred_original = inverse_lookup[pred_compact]             # [H, W], long
         pred_original_np = pred_original.cpu().numpy().astype(np.int32)
 
-        # 彩色可视化（基于原始 ID）
+        # Color visualization using original IDs
         pred_obj_mask = visualize_obj(pred_original_np)
 
-        # ---------- GT ----------
-        gt_np = None          # 初始化变量，防止下面报错
+        # ---------- GT (train only, if available) ----------
+        gt_np = None
         gt_rgb_mask = None
-        
+
         if name == "train":
-            if view.objects is not None:  # <--- 【新增】检查是否存在 mask
+            if view.objects is not None:
                 gt_objects = view.objects
                 gt_np = gt_objects.cpu().numpy().astype(np.int32)
                 gt_rgb_mask = visualize_obj(gt_np)
             else:
-                # 这是一个混入训练集的 Test 图片，没有 GT
+                # Some train views might not have GT masks
                 pass
 
-        # ---------- 特征 PCA 可视化 ----------
-        rgb_mask = feature_to_rgb(rendering_obj.squeeze(0))  # 把特征直接做 PCA 可视化
+        # ---------- Feature PCA visualization ----------
+        rgb_mask = feature_to_rgb(rendering_obj.squeeze(0))
 
-        # 保存特征 PCA 可视化
         Image.fromarray(rgb_mask).save(os.path.join(colormask_path, '{}'.format(view.image_name) + ".png"))
 
         if name == "train":
-            # 只有当 gt_np 不为空时才保存 GT
             if gt_np is not None:
                 Image.fromarray(gt_np.astype(np.uint16)).save(
                     os.path.join(gt_object_path, '{}'.format(view.image_name) + ".png")
@@ -249,17 +248,17 @@ def render_set(model_path,
                     os.path.join(gt_colormask_path, '{}'.format(view.image_name) + ".png")
                 )
 
-        # 预测彩色图（原始 ID）
+        # Predicted color (original IDs)
         Image.fromarray(pred_obj_mask).save(
             os.path.join(pred_obj_path, '{}'.format(view.image_name) + ".png")
         )
 
-        # 预测灰度图（原始 ID）
+        # Predicted gray (original IDs)
         Image.fromarray(pred_original_np.astype(np.uint16)).save(
             os.path.join(test_obj_path, '{}'.format(view.image_name) + ".png")
         )
 
-        # ---------- 保存渲染图 + 原始 RGB GT ----------
+        # Save RGB render and GT RGB image
         gt = view.original_image[0:3, :, :]
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{}'.format(view.image_name) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{}'.format(view.image_name) + ".png"))
@@ -270,10 +269,10 @@ def render_sets(dataset: ModelParams, pipeline: PipelineParams, render_params: R
         gaussians = GaussianModel(dataset.sh_degree)
         scene = Scene(dataset, gaussians, load_iteration=render_params.iteration, shuffle=False)
 
-        # ========= 和训练时完全一致的 num_classes 计算逻辑 =========
+        # ========= Same num_classes logic as training =========
         matched_mask_path = os.path.join(dataset.source_path, dataset.object_path)
 
-        # 打印 info.json（仅做参考）
+        # Print info.json if present (for reference only)
         info_path = os.path.join(matched_mask_path, "info.json")
         if os.path.exists(info_path):
             info = json.load(open(info_path))
@@ -281,7 +280,7 @@ def render_sets(dataset: ModelParams, pipeline: PipelineParams, render_params: R
         else:
             print(f"[WARN] info.json not found at {info_path}")
 
-        # 读取训练时生成的 id_mapping.json（old_id -> new_id）
+        # Load id_mapping.json produced during training (old_id -> new_id)
         id_map_path = os.path.join(matched_mask_path, "id_mapping.json")
         if not os.path.exists(id_map_path):
             raise RuntimeError(
@@ -298,18 +297,17 @@ def render_sets(dataset: ModelParams, pipeline: PipelineParams, render_params: R
         else:
             max_new_id = 0
 
-        num_classes = max_new_id + 1  # 背景 0 + K 个前景
+        num_classes = max_new_id + 1  # background 0 + K foreground
         print(f"[Global-ID-Mapping@render] num_classes (with background) = {num_classes}")
 
-        # ========= 构建从「紧凑 ID」回到「原始 ID」的查找表 =========
-        # 背景：0 -> 0
+        # ========= Build inverse lookup: compact ID -> original ID =========
         inverse_lookup = torch.zeros(num_classes, dtype=torch.long, device="cuda")
         inverse_lookup[0] = 0
         for old_id, new_id in id_map.items():
             if 0 <= new_id < num_classes:
                 inverse_lookup[new_id] = int(old_id)
 
-        # ========= 构造 classifier，并加载训练好的权重 =========
+        # ========= Build classifier and load trained weights =========
         classifier = torch.nn.Conv2d(gaussians.num_objects, num_classes, kernel_size=1).cuda()
 
         ckpt_path = os.path.join(
@@ -325,10 +323,10 @@ def render_sets(dataset: ModelParams, pipeline: PipelineParams, render_params: R
         bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
-        # 从 render_params 里拿 fps（如果没有就默认 30）
+        # FPS for video (default 30)
         fps = getattr(render_params, "fps", 30)
 
-        # 渲染视频
+        # Render video
         if render_params.render_video:
             render_video_func(
                 dataset.source_path,
@@ -343,7 +341,7 @@ def render_sets(dataset: ModelParams, pipeline: PipelineParams, render_params: R
                 fps=fps
             )
 
-        # 渲染 train set
+        # Render train set
         if not render_params.skip_train:
             render_set(
                 dataset.model_path,
@@ -357,7 +355,7 @@ def render_sets(dataset: ModelParams, pipeline: PipelineParams, render_params: R
                 inverse_lookup
             )
 
-        # 渲染 test set
+        # Render test set
         if (not render_params.skip_test) and (len(scene.getTestCameras()) > 0):
             render_set(
                 dataset.model_path,
@@ -372,35 +370,37 @@ def render_sets(dataset: ModelParams, pipeline: PipelineParams, render_params: R
             )
 
 
-# ============ main：只用 output 文件夹名 ============
+# ============ main: use output folder name only ============
 
 if __name__ == "__main__":
     """
-    用法示例：
+    Example:
         cd /workspace/Gaga
         python render.py \
             --output_name subset_building1_29_1112 \
             --iteration 10000 \
             --render_video
 
-    只需要给 output 下面的文件夹名字，脚本会自动去：
+    You only need the folder name under ./output.
+    The script will load training-time args from:
         ./output/<output_name>/cfg_args
-    里读训练时保存的参数（包括 scene / object_path / resolution 等）。
-    然后：
-        - 强制把 dataset.model_path 设为 ./output/<output_name>
-        - 从这个目录加载 point_cloud 和 classifier.pth
+
+    Then it will:
+      - force dataset.model_path to ./output/<output_name>
+      - load point_cloud and classifier.pth from that directory
     """
 
-    # ====== 1. 先解析命令行，只关心渲染相关参数 + output_name ======
+    # ====== 1) Parse CLI args (render-related args + output_name only) ======
     parser = ArgumentParser(description="Testing (render) script parameters")
 
-    # 这些只是为了把 resolution / skip_train / skip_test / render_video / fps 等参数加到命令行
+    # These are only used to register CLI flags like resolution/skip_train/skip_test/render_video/fps, etc.
     _mp = ModelParams(parser, sentinel=True)
     _pp = PipelineParams(parser)
     _rp = RenderParams(parser)
 
     parser.add_argument("--quiet", action="store_true")
-    # 新增：只输入 output 目录名（注意：不再加 -o，避免和 object_path 冲突）
+
+    # New: only input the output folder name (no -o to avoid conflicts with object_path)
     parser.add_argument(
         "--output_name",
         type=str,
@@ -410,7 +410,7 @@ if __name__ == "__main__":
 
     args_cmd = parser.parse_args(sys.argv[1:])
 
-    # ====== 2. 根据 output_name 拼出绝对路径，并读取 cfg_args ======
+    # ====== 2) Build output_dir from output_name and load cfg_args ======
     repo_root = os.path.dirname(os.path.abspath(__file__))
     output_root = os.path.join(repo_root, "output")
     output_dir = os.path.join(output_root, args_cmd.output_name)
@@ -424,33 +424,31 @@ if __name__ == "__main__":
     print(f"Loading cfg_args from {cfg_path}")
     with open(cfg_path, "r") as f:
         cfg_string = f.read()
-    # cfg_args 里本来就是一个 Namespace(...) 的字符串
-    cfg_ns = eval(cfg_string)  # Namespace
+    # cfg_args is stored as a Namespace(...) string
+    cfg_ns = eval(cfg_string)
 
-    # ====== 3. 合并：cfg_args 里的是默认值，命令行覆盖它 ======
+    # ====== 3) Merge cfg defaults and CLI overrides ======
     merged_dict = vars(cfg_ns).copy()
     for k, v in vars(args_cmd).items():
         if k == "output_name":
             continue
-        # None 不覆盖
         if v is not None:
             merged_dict[k] = v
 
-    # 强制使用新的 output_dir 作为 model_path（也就是渲染时的模型目录）
+    # Force model_path to output_dir for rendering
     merged_dict["model_path"] = os.path.abspath(output_dir)
 
-    # 渲染阶段只需要从 output_dir 读取 point_cloud，不再用 lift 分支
+    # Rendering only needs point_cloud from output_dir; do not use lift branch
     merged_dict["lift"] = False
 
-    # 防止 ModelParams.extract 再用 scene/model/output 这些“纯名字”去改路径
+    # Prevent ModelParams.extract from recomputing paths from name-only fields
     for key in ("scene", "model", "output"):
         if key in merged_dict:
-            # 保留 cfg_args 里已经展开好的 source_path / model_path 等，不再用这些名字重算
             merged_dict[key] = ""
 
     full_args = Namespace(**merged_dict)
 
-    # ====== 4. 用 dummy parser + ParamGroup.extract 把参数分组成 dataset / pipeline / render ======
+    # ====== 4) Use a dummy parser + ParamGroup.extract to split args into groups ======
     dummy_parser = ArgumentParser()
     mp = ModelParams(dummy_parser, sentinel=True)
     pp = PipelineParams(dummy_parser)
@@ -460,14 +458,14 @@ if __name__ == "__main__":
     pipeline_params = pp.extract(full_args)
     render_params = rp.extract(full_args)
 
-    # 再确保一下 model_path 指向 output_dir（保险）
+    # Ensure model_path points to output_dir (safety)
     dataset_params.model_path = os.path.abspath(output_dir)
 
     print("Final model_path for rendering:", dataset_params.model_path)
     print("Source path (dataset):", dataset_params.source_path)
 
-    # 初始化 RNG
+    # Init RNG/state
     safe_state(getattr(full_args, "quiet", False))
 
-    # 开始渲染
+    # Start rendering
     render_sets(dataset_params, pipeline_params, render_params)

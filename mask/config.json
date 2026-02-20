@@ -1,21 +1,61 @@
 {
-    "sam": {
-        "sam_encoder_version": "vit_h",
-        "sam_checkpoint_path": "/workspace/CityGMLGaussian/weight/sam_vit_h_4b8939.pth",
-        "sam_num_points_per_side": 32,
-        "sam_num_points_per_batch": 32,
-        "sam_pred_iou_threshold": 0.7,
-        "sam_crop_n_layers": 0,
-        "confidence_threshold": 0.5
-    },
+  "clip": {
+    "clip_model_name": "ViT-B/32",
+    "city_text_prompts": [
+      "a building",
+      "a house",
+      "a wall of a building",
+      "a window of a building",
+      "a door of a building",
+      "a roof of a building",
+      "a balcony of a building",
+      "a facade of a building"
+    ],
 
-    "projector": {
-        "seg_method": "sam",
-        "front_percentage": 0.2,
-        "iou_threshold": 0.2,
-        "num_patch": 8,
-        "clip_sim_threshold": 0.7,
-        "min_views": 3,
-        "max_group_distance": 80.0
-    }
+    "fore_text_prompts": [
+      "a tree",
+      "a big tree",
+      "a thin tree with branches",
+      "vegetation",
+      "bushes",
+      "leaves and branches",
+      "a street tree",
+      "a tree with a building behind it",
+
+      "a person",
+      "a car",
+      "a bus",
+      "a truck",
+      "a traffic sign",
+      "a pole",
+      "a street lamp"
+    ],
+
+    "default_scale": 0.25,
+    "default_overlap_clip_thresh": 0.8,
+    "default_clip_margin": 0.05,
+    "default_min_sam_pixels": 50,
+    "default_confidence_threshold": 0.5,
+    "color_seed": 0
+  },
+
+  "sam": {
+    "sam_encoder_version": "vit_h",
+    "sam_checkpoint_path": "/workspace/CityGMLGaussian/weight/sam_vit_h_4b8939.pth",
+    "sam_num_points_per_side": 32,
+    "sam_num_points_per_batch": 32,
+    "sam_pred_iou_threshold": 0.7,
+    "sam_crop_n_layers": 0,
+    "confidence_threshold": 0.5
+  },
+
+  "projector": {
+    "seg_method": "sam",
+    "front_percentage": 0.2,
+    "iou_threshold": 0.2,
+    "num_patch": 8,
+    "clip_sim_threshold": 0.7,
+    "min_views": 3,
+    "max_group_distance": 80.0
+  }
 }

@@ -1,3 +1,7 @@
+#
+# Copyright (C) 2026, CityGMLGaussian
+# All rights reserved.
+
 import os
 import sys
 import cv2
@@ -12,59 +16,24 @@ import clip
 from PIL import Image
 
 
-# ===================== 全局参数 / Prompt 定义（方便以后统一进配置） =====================
+# ===================== Config helpers =====================
 
-# ---- CLIP 模型 ----
-CLIP_MODEL_NAME = "ViT-B/32"
-
-# 建筑类文本 prompt
-CITY_TEXT_PROMPTS = [
-    "a building",
-    "a house",
-    "a wall of a building",
-    "a window of a building",
-    "a door of a building",
-    "a roof of a building",
-    "a balcony of a building",
-    "a facade of a building",
-]
-
-# 前景类文本 prompt
-FORE_TEXT_PROMPTS = [
-    # 树 / 植被
-    "a tree",
-    "a big tree",
-    "a thin tree with branches",
-    "vegetation",
-    "bushes",
-    "leaves and branches",
-    "a street tree",
-    "a tree with a building behind it",
-    # 动态物体 / 道路元素
-    "a person",
-    "a car",
-    "a bus",
-    "a truck",
-    "a traffic sign",
-    "a pole",
-    "a street lamp",
-]
-
-# ---- SAM + CLIP 相关默认阈值 ----
-DEFAULT_SCALE = 0.25           # 图像缩放比例
-DEFAULT_OVERLAP_CLIP_THRESH = 0.8
-DEFAULT_CLIP_MARGIN = 0.05
-DEFAULT_MIN_SAM_PIXELS = 50    # SAM 实例最小像素数
-
-DEFAULT_CONFIDENCE_THRESHOLD = 0.5  # config.json 中没有时兜底
-
-# ---- 可视化颜色相关 ----
-COLOR_SEED = 0
+def _load_full_config(script_dir: str) -> Dict:
+    config_path = os.path.join(script_dir, "mask", "config.json")
+    assert os.path.exists(config_path), f"config.json not found: {config_path}"
+    with open(config_path, "r") as f:
+        return json.load(f)
 
 
-# ===================== CLIP 辅助函数 =====================
+def _get_clip_cfg(full_config: Dict) -> Dict:
+    cfg = full_config.get("clip", {})
+    assert isinstance(cfg, dict), "`clip` in config.json must be a dict"
+    return cfg
 
-def load_clip_model(device, model_name: str = CLIP_MODEL_NAME):
+
+# ===================== CLIP helpers =====================
+
+def load_clip_model(device, model_name: str):
     model, preprocess = clip.load(model_name, device=device)
     model.eval()
     return model, preprocess
@@ -86,20 +55,20 @@ def classify_sam_instance_with_clip(
     mask_bool_np,    # H x W, bool (numpy)
     text_feats_city,
     text_feats_fore,
-    margin: float = DEFAULT_CLIP_MARGIN,
+    margin: float,
 ) -> str:
     """
-    用 CLIP 判断一个 SAM 实例更像建筑 (city) 还是前景 (fore)。
-    margin > 0: 只有当前景相似度明显高于建筑时才判为 fore。
+    Use CLIP to classify a SAM instance as either building-like ("city") or foreground-like ("fore").
+    If margin > 0, only classify as "fore" when foreground similarity is sufficiently higher than city similarity.
     """
     ys, xs = np.where(mask_bool_np)
     if ys.size == 0:
-        return "city"  # 空实例直接当建筑扔掉
+        return "city"
 
     y1, y2 = ys.min(), ys.max()
     x1, x2 = xs.min(), xs.max()
 
-    # 稍微 pad 一点，别裁太紧
+    # Add a small padding to avoid overly tight crops
     H, W = image_rgb.shape[:2]
     pad = 4
     y1 = max(0, y1 - pad)
@@ -110,7 +79,7 @@ def classify_sam_instance_with_clip(
     crop = image_rgb[y1:y2 + 1, x1:x2 + 1, :]
     mask_crop = mask_bool_np[y1:y2 + 1, x1:x2 + 1]
     crop = crop.copy()
-    crop[~mask_crop] = 255  # 非实例区域涂白
+    crop[~mask_crop] = 255  # paint non-instance area to white
 
     pil_img = Image.fromarray(crop)
 
@@ -128,30 +97,30 @@ def classify_sam_instance_with_clip(
         return "city"
 
 
-# ===================== 可视化相关 =====================
+# ===================== Visualization helpers =====================
 
-def get_n_different_colors(n: int) -> np.ndarray:
-    """生成 n 个随机颜色，用于可视化实例 mask。"""
-    np.random.seed(COLOR_SEED)
+def get_n_different_colors(n: int, seed: int) -> np.ndarray:
+    """Generate n random colors for instance mask visualization."""
+    np.random.seed(int(seed))
     return np.random.randint(1, 256, (n, 3), dtype=np.uint8)
 
 
-def visualize_mask(mask: np.ndarray) -> np.ndarray:
+def visualize_mask(mask: np.ndarray, color_seed: int) -> np.ndarray:
     """
-    将实例标签图（0 表示背景，1..N 表示不同实例）转换为彩色图方便可视化。
+    Convert an instance label image (0=background, 1..N=instances) into a colorful RGB image for visualization.
     """
     color_mask = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
     num_masks = int(mask.max())
     if num_masks == 0:
         return color_mask
 
-    random_colors = get_n_different_colors(num_masks)
+    random_colors = get_n_different_colors(num_masks, seed=color_seed)
     for i in range(num_masks):
         color_mask[mask == (i + 1)] = random_colors[i]
     return color_mask
 
 
-# ===================== SAM 模型构建 =====================
+# ===================== SAM model construction =====================
 
 def get_seg_model(
     config: Dict,
@@ -159,25 +128,23 @@ def get_seg_model(
     device: str,
 ):
     """
-    根据 config.json 中的配置，构建分割模型。
-    所有与 SAM 相关的参数（encoder、checkpoint、points_per_side 等）
-    统一从 config.json 中读取，不再从命令行传入。
+    Build the segmentation model based on config.json.
+    All SAM-related parameters (encoder, checkpoint, points_per_side, etc.) are read from config.json only.
     """
     if seg_method == "sam":
         from segment_anything import sam_model_registry
 
-        # === 这里显式把 mask 目录加入 sys.path，方便从 mask/ 里导入 ===
+        # Explicitly add the mask directory into sys.path for local imports under mask/
         script_dir = os.path.dirname(os.path.abspath(__file__))
         mask_dir = os.path.join(script_dir, "mask")
         if mask_dir not in sys.path:
             sys.path.append(mask_dir)
-        from automatic_mask_generator import SamAutomaticMaskGenerator
+        from mask.automatic_mask_generator import SamAutomaticMaskGenerator
 
         sam = sam_model_registry[config["sam_encoder_version"]](
             checkpoint=config["sam_checkpoint_path"]
         ).to(device=device)
 
-        # 全部从 config 中读，若缺失则给默认值
         pps = config.get("sam_num_points_per_side", 32)
         ppb = config.get("sam_num_points_per_batch", 64)
         piou = config.get("sam_pred_iou_threshold", 0.86)
@@ -196,54 +163,48 @@ def get_seg_model(
         raise NotImplementedError("only sam seg_method is supported for now")
 
 
-# ===================== SAM + CityGML + CLIP 前景筛选 =====================
+# ===================== SAM + CityGML + CLIP foreground filtering =====================
 
 def get_sam_mask(
     auto_sam,
     image: np.ndarray,                  # RGB, numpy
     confidence_threshold: float,
     city_mask: Optional[np.ndarray] = None,
-    overlap_clip_thresh: float = DEFAULT_OVERLAP_CLIP_THRESH,
-    # ==== CLIP 相关，可选 ====
+    overlap_clip_thresh: float = 0.8,
     clip_model=None,
     clip_preprocess=None,
     clip_device: str = "cuda",
     text_feats_city=None,
     text_feats_fore=None,
-    clip_margin: float = DEFAULT_CLIP_MARGIN,
-    min_sam_pixels: int = DEFAULT_MIN_SAM_PIXELS,
-    enable_clip: bool = True,          # 外部开关：是否启用 CLIP
+    clip_margin: float = 0.05,
+    min_sam_pixels: int = 50,
+    enable_clip: bool = True,
 ) -> np.ndarray:
     """
-    生成“前景实例分割图”，返回 numpy.uint16:
-    0=背景/建筑，1..N=前景实例。
+    Generate a foreground instance segmentation map as numpy.uint16:
+    0 = background/building, 1..N = foreground instances.
     """
     H, W = image.shape[:2]
 
     with torch.no_grad():
         mask_data = auto_sam.generate(image)
 
-    # 假设 mask_data["masks"] 和 ["iou_preds"] 是 torch.Tensor 或可转成 tensor
     pred_masks = mask_data["masks"].float()   # [N, H, W]
     pred_scores = mask_data["iou_preds"]      # [N]
 
-    # 统一 device（显式处理 CPU / GPU）
     pred_masks = pred_masks.to("cuda" if torch.cuda.is_available() else "cpu")
     pred_scores = pred_scores.to(pred_masks.device)
     device = pred_masks.device
 
-    # 置信度筛选
     keep_idx = (pred_scores >= confidence_threshold)
     if keep_idx.sum().item() == 0:
         return np.zeros((H, W), dtype=np.uint16)
 
-    pred_masks = pred_masks[keep_idx]  # [K, H, W]
-    pred_scores = pred_scores[keep_idx]  # [K]
+    pred_masks = pred_masks[keep_idx]
+    pred_scores = pred_scores[keep_idx]
 
-    # 二值 mask
-    masks_bool = (pred_masks > 0.5)   # bool [K, H, W]
+    masks_bool = (pred_masks > 0.5)
 
-    # city mask → numpy bool；先不转 torch，等知道 device 后再转
     city_bin_np: Optional[np.ndarray] = None
     if city_mask is not None:
         if city_mask.ndim == 3:
@@ -252,29 +213,25 @@ def get_sam_mask(
             city_bin_np = (city_mask > 0)
         city_bin_np = city_bin_np.astype(np.bool_)
 
-    # ====== 1) 向量化计算面积 + area 过滤 ======
-    # areas: [K]
     areas = masks_bool.sum(dim=(1, 2))
     area_keep = (areas >= min_sam_pixels)
     if area_keep.sum().item() == 0:
         return np.zeros((H, W), dtype=np.uint16)
 
-    masks_bool = masks_bool[area_keep]      # [K2, H, W]
-    pred_scores = pred_scores[area_keep]    # [K2]
-    areas = areas[area_keep]                # [K2]
+    masks_bool = masks_bool[area_keep]
+    pred_scores = pred_scores[area_keep]
+    areas = areas[area_keep]
     K2 = masks_bool.shape[0]
 
-    # ====== 2) 向量化计算和 city_mask 的重叠比例 ======
     if city_bin_np is not None:
-        city_bin_torch = torch.from_numpy(city_bin_np).to(device)  # [H, W], bool
-        overlaps = (masks_bool & city_bin_torch).sum(dim=(1, 2))   # [K2]
+        city_bin_torch = torch.from_numpy(city_bin_np).to(device)
+        overlaps = (masks_bool & city_bin_torch).sum(dim=(1, 2))
         overlap_ratio = overlaps.float() / areas.float().clamp_min(1)
     else:
         city_bin_torch = None
         overlaps = torch.zeros_like(areas, dtype=torch.long, device=device)
         overlap_ratio = torch.zeros_like(areas, dtype=torch.float32, device=device)
 
-    # 实际是否使用 CLIP
     use_clip = (
         enable_clip and
         (clip_model is not None) and
@@ -283,17 +240,14 @@ def get_sam_mask(
         (text_feats_fore is not None)
     )
 
-    # ====== 3) 决定哪些实例直接保留，哪些需要 CLIP，哪些直接丢弃 ======
     if city_bin_torch is None:
-        # 没有 citygml → 全部直接保留，不用 CLIP
         keep_direct_mask = torch.ones(K2, dtype=torch.bool, device=device)
         needs_clip_mask = torch.zeros(K2, dtype=torch.bool, device=device)
     else:
-        keep_direct_mask = (overlap_ratio < overlap_clip_thresh)          # overlap 小 → 直接保留
-        needs_clip_mask = (overlap_ratio >= overlap_clip_thresh)          # overlap 大 → 需要 CLIP 或直接丢弃
+        keep_direct_mask = (overlap_ratio < overlap_clip_thresh)
+        needs_clip_mask = (overlap_ratio >= overlap_clip_thresh)
 
     if not use_clip:
-        # 不启用 CLIP 时，把 needs_clip 的全丢弃
         needs_clip_mask = torch.zeros_like(needs_clip_mask)
 
     idx_keep_direct = torch.nonzero(keep_direct_mask, as_tuple=False).flatten()
@@ -302,18 +256,15 @@ def get_sam_mask(
     kept_masks = []
     kept_scores = []
 
-    # 3.1 直接保留的实例
     if idx_keep_direct.numel() > 0:
         for idx in idx_keep_direct.tolist():
             kept_masks.append(masks_bool[idx])
             kept_scores.append(pred_scores[idx])
 
-    # 3.2 需要 CLIP 判定的实例（重叠高 & use_clip=True & 有 citygml）
     if use_clip and city_bin_torch is not None and idx_needs_clip.numel() > 0:
-        image_rgb = image  # numpy RGB
+        image_rgb = image
         for idx in idx_needs_clip.tolist():
             m_tensor = masks_bool[idx]
-            # 这里只在需要 CLIP 时才把 mask 转成 numpy，避免频繁来回
             m_np_bool = m_tensor.detach().to("cpu").numpy().astype(bool)
             sem = classify_sam_instance_with_clip(
                 clip_model,
@@ -332,21 +283,17 @@ def get_sam_mask(
     if len(kept_masks) == 0:
         return np.zeros((H, W), dtype=np.uint16)
 
-    kept_masks = torch.stack(kept_masks, dim=0)   # [K_fg, H, W], bool
-    kept_scores = torch.stack(kept_scores, dim=0) # [K_fg]
+    kept_masks = torch.stack(kept_masks, dim=0)
+    kept_scores = torch.stack(kept_scores, dim=0)
 
-    # ========= 4) 按置信度从低到高画，让高置信度最后覆盖 =========
-    mask_id = torch.zeros((H, W), dtype=torch.int32, device=device)  # 临时 id
+    mask_id = torch.zeros((H, W), dtype=torch.int32, device=device)
 
-    # sort_idx: 置信度从低到高
     _, order = torch.sort(kept_scores, descending=False)
 
     for new_idx, idx in enumerate(order.tolist()):
-        m_bool = kept_masks[idx]  # bool [H, W]，同一 device
-        # new_idx+1 作为临时 id
+        m_bool = kept_masks[idx]
         mask_id[m_bool] = int(new_idx + 1)
 
-    # ========= 5) 压缩编号，去掉被覆盖得太厉害的实例 =========
     output_mask_t = torch.zeros((H, W), dtype=torch.int32, device=device)
     unique_ids = mask_id.unique()
 
@@ -361,12 +308,11 @@ def get_sam_mask(
         output_mask_t[cur_mask] = cur_id
         cur_id += 1
 
-    # 转 numpy uint16 输出
     output_mask = output_mask_t.to("cpu").numpy().astype(np.uint16)
     return output_mask
 
 
-# ===================== 主流程 =====================
+# ===================== Main pipeline =====================
 
 def run_segmentation(
     scene: str,
@@ -374,34 +320,48 @@ def run_segmentation(
     visualize: bool = False,
     use_gml: bool = False,
     use_clip: bool = False,
-    scale: float = DEFAULT_SCALE,
+    scale: Optional[float] = None,
 ) -> None:
     """
-    主流程封装函数：
-    - 从 <当前脚本同级>/dataset/<scene> 读取数据；
-    - 从 images/ 读取输入图像；
-    - 若 use_gml=True，则从 gml_mask/ 读取建筑掩码用于辅助前景筛选；
-    - 若 use_clip=True，则加载 CLIP 并在与建筑高度重叠的实例上做语义筛选；
-    - 使用 mask/config.json 中对应 seg_method 的配置构建模型并跑分割。
+    Main pipeline:
+    - Read data from <script_dir>/dataset/<scene>
+    - Read images from images/
+    - If use_gml=True, read building masks from gml_mask/ to help filter foreground
+    - If use_clip=True, load CLIP and classify highly-overlapping instances
+    - Build the segmentation model from mask/config.json and run segmentation
     """
-    # 设备（注意：get_sam_mask 里也会处理 device，这里只是构建模型时使用）
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # 当前脚本所在目录（现在和 mask/ 同级）
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    # === 路径修改：dataset 在当前目录下，而不是 ../dataset ===
+    full_config = _load_full_config(script_dir)
+    clip_cfg = _get_clip_cfg(full_config)
+
+    assert seg_method in full_config, f"seg_method '{seg_method}' not found in config.json"
+    config = full_config[seg_method]
+
+    clip_model_name = clip_cfg["clip_model_name"]
+    city_text_prompts = clip_cfg["city_text_prompts"]
+    fore_text_prompts = clip_cfg["fore_text_prompts"]
+
+    default_scale = float(clip_cfg["default_scale"])
+    overlap_clip_thresh = float(clip_cfg["default_overlap_clip_thresh"])
+    clip_margin = float(clip_cfg["default_clip_margin"])
+    min_sam_pixels = int(clip_cfg["default_min_sam_pixels"])
+    default_conf_threshold = float(clip_cfg["default_confidence_threshold"])
+    color_seed = int(clip_cfg["color_seed"])
+
+    if scale is None:
+        scale = default_scale
+
     dataset_root = os.path.normpath(os.path.join(script_dir, "dataset"))
 
-    # 场景目录
     scene_folder = os.path.join(dataset_root, scene)
     assert os.path.exists(scene_folder), f"scene folder not found: {scene_folder}"
 
-    # 输入图像目录：<dataset>/<scene>/images
     image_folder = os.path.join(scene_folder, "images")
     assert os.path.exists(image_folder), f"image folder not found: {image_folder}"
 
-    # 输出目录：这里仍然叫 raw_<seg_method>_mask，但存的是 .npy
     output_folder = os.path.join(scene_folder, f"raw_{seg_method}_mask")
     os.makedirs(output_folder, exist_ok=True)
 
@@ -410,15 +370,7 @@ def run_segmentation(
         vis_output_folder = os.path.join(scene_folder, f"raw_{seg_method}_mask_vis")
         os.makedirs(vis_output_folder, exist_ok=True)
 
-    # === 路径修改：config.json 放在 mask/ 目录下 ===
-    config_path = os.path.join(script_dir, "mask", "config.json")
-    assert os.path.exists(config_path), f"config.json not found: {config_path}"
-
-    full_config = json.load(open(config_path, "r"))
-    assert seg_method in full_config, f"seg_method '{seg_method}' not found in config.json"
-    config = full_config[seg_method]
-
-    confidence_threshold = config.get("confidence_threshold", DEFAULT_CONFIDENCE_THRESHOLD)
+    confidence_threshold = float(config.get("confidence_threshold", default_conf_threshold))
 
     print(f"[INFO] loading {seg_method} model ...")
     seg_model = get_seg_model(
@@ -427,23 +379,21 @@ def run_segmentation(
         device=device,
     )
 
-    # ====== CLIP 相关：只有在 use_clip=True 时才加载 ======
     if use_clip:
         clip_device = "cuda" if torch.cuda.is_available() else "cpu"
-        print(f"[INFO] loading CLIP model '{CLIP_MODEL_NAME}' on {clip_device} ...")
-        clip_model, clip_preprocess = load_clip_model(clip_device)
+        print(f"[INFO] loading CLIP model '{clip_model_name}' on {clip_device} ...")
+        clip_model, clip_preprocess = load_clip_model(clip_device, model_name=clip_model_name)
 
-        text_feats_city = encode_texts(clip_model, clip_device, CITY_TEXT_PROMPTS)
-        text_feats_fore = encode_texts(clip_model, clip_device, FORE_TEXT_PROMPTS)
+        text_feats_city = encode_texts(clip_model, clip_device, city_text_prompts)
+        text_feats_fore = encode_texts(clip_model, clip_device, fore_text_prompts)
     else:
         print("[INFO] CLIP filtering disabled (use_clip = False).")
-        clip_device = "cpu"  # 占个坑，不会真的用
+        clip_device = "cpu"
         clip_model = None
         clip_preprocess = None
         text_feats_city = None
         text_feats_fore = None
 
-    # citygml 目录：<dataset>/<scene>/gml_mask
     citygml_dir = None
     if use_gml:
         citygml_dir = os.path.join(scene_folder, "gml_mask")
@@ -456,7 +406,6 @@ def run_segmentation(
     print(f"[INFO] found {len(image_names)} files in {image_folder}")
 
     for image_name in tqdm(image_names):
-        # 跳过非图像
         if not image_name.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")):
             continue
 
@@ -476,49 +425,48 @@ def run_segmentation(
         else:
             img_small = img
 
-        # SAM 期望 RGB 输入，OpenCV 是 BGR，这里需转换
         img_small_rgb = cv2.cvtColor(img_small, cv2.COLOR_BGR2RGB)
 
-        # 直接按同名去 gml_mask 目录找
         city_small = None
         if citygml_dir is not None:
-            city_path = os.path.join(
-                citygml_dir,
-                os.path.splitext(image_name)[0] + ".png"
-            )
-            if os.path.exists(city_path):
-                # 使用 IMREAD_UNCHANGED 读取可能存在的透明通道
-                city_img = cv2.imread(city_path, cv2.IMREAD_UNCHANGED)
-                if city_img is not None:
-                    if scale != 1.0:
-                        city_small = cv2.resize(
-                            city_img,
-                            (int(w * scale), int(h * scale)),
-                            interpolation=cv2.INTER_NEAREST,
-                        )
-                    else:
-                        city_small = city_img
-            else:
-                city_small = None
+            base = os.path.splitext(image_name)[0]
+
+            city_path_npy = os.path.join(citygml_dir, base + ".npy")
+            city_path_png = os.path.join(citygml_dir, base + ".png")
+
+            city_arr = None
+            if os.path.exists(city_path_npy):
+                city_arr = np.load(city_path_npy)
+            elif os.path.exists(city_path_png):
+                city_arr = cv2.imread(city_path_png, cv2.IMREAD_UNCHANGED)
+
+            if city_arr is not None:
+                if scale != 1.0:
+                    city_small = cv2.resize(
+                        city_arr,
+                        (int(w * scale), int(h * scale)),
+                        interpolation=cv2.INTER_NEAREST,
+                    )
+                else:
+                    city_small = city_arr
 
         mask_small = get_sam_mask(
             auto_sam=seg_model,
             image=img_small_rgb,
             confidence_threshold=confidence_threshold,
             city_mask=city_small,
-            overlap_clip_thresh=DEFAULT_OVERLAP_CLIP_THRESH,
+            overlap_clip_thresh=overlap_clip_thresh,
             clip_model=clip_model,
             clip_preprocess=clip_preprocess,
             clip_device=clip_device,
             text_feats_city=text_feats_city,
             text_feats_fore=text_feats_fore,
-            clip_margin=DEFAULT_CLIP_MARGIN,
-            min_sam_pixels=DEFAULT_MIN_SAM_PIXELS,
+            clip_margin=clip_margin,
+            min_sam_pixels=min_sam_pixels,
             enable_clip=use_clip,
         )
 
         if scale != 1.0:
-            # mask_small 是 uint16 numpy，最近邻放大回原分辨率
             mask = cv2.resize(
                 mask_small,
                 (w, h),
@@ -527,19 +475,16 @@ def run_segmentation(
         else:
             mask = mask_small.astype(np.uint16)
 
-        # === 以 .npy 格式保存 mask，支持 >256 个类别 ===
         base_name = os.path.splitext(image_name)[0]
         save_path_npy = os.path.join(output_folder, base_name + ".npy")
         np.save(save_path_npy, mask)
 
-        # 可视化仍然输出彩色 PNG
         if visualize and vis_output_folder is not None:
-            vis_mask = visualize_mask(mask)          # RGB
+            vis_mask = visualize_mask(mask, color_seed=color_seed)
             vis_path = os.path.join(
                 vis_output_folder,
                 base_name + ".png",
             )
-            # OpenCV 期望 BGR
             cv2.imwrite(vis_path, vis_mask[:, :, ::-1])
 
     print("[INFO] segmentation finished.")
@@ -548,7 +493,6 @@ def run_segmentation(
 if __name__ == "__main__":
     parser = ArgumentParser()
 
-    # 1) scene 名称
     parser.add_argument(
         "--scene",
         "-s",
@@ -557,7 +501,6 @@ if __name__ == "__main__":
         help="scene name under dataset/, e.g. 'mipnerf360/room'",
     )
 
-    # 2) 分割方法，目前只支持 sam，但保留参数以便以后扩展
     parser.add_argument(
         "--seg_method",
         "-m",
@@ -566,7 +509,6 @@ if __name__ == "__main__":
         help="segmentation method, currently only 'sam' is supported",
     )
 
-    # 3) 是否保存可视化的彩色 mask
     parser.add_argument(
         "--visualize",
         "-v",
@@ -574,7 +516,6 @@ if __name__ == "__main__":
         help="if set, also save colorful visualization of instance masks",
     )
 
-    # 4) 是否启用 gml_mask 作为建筑掩码
     parser.add_argument(
         "--gml",
         "-g",
@@ -582,7 +523,6 @@ if __name__ == "__main__":
         help="if set, use dataset/<scene>/gml_mask masks to filter SAM results",
     )
 
-    # 5) 是否启用 CLIP 语义筛选
     parser.add_argument(
         "--clip",
         "-c",

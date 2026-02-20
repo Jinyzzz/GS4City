@@ -1,4 +1,8 @@
-# semantic_viewer/focus_utils.py
+#
+# Copyright (C) 2026, CityGMLGaussian
+# All rights reserved.
+#
+
 import numpy as np
 import torch
 
@@ -6,7 +10,6 @@ torch.backends.cudnn.enabled = False
 
 
 def build_color_map(n_cls: int):
-    """为每个类别生成固定随机颜色（0 类为黑）。"""
     rng = np.random.RandomState(0)
     colors = rng.rand(n_cls, 3).astype(np.float32)
     if n_cls > 0:
@@ -15,9 +18,6 @@ def build_color_map(n_cls: int):
 
 
 def estimate_focus_from_gaussians(gaussians, top_ratio: float = 0.05):
-    """
-    从高斯里估计一个“主体中心”和合适的观察距离。
-    """
     try:
         xyz = gaussians._xyz.detach().cpu()
         op = gaussians._opacity.detach().view(-1).cpu()
@@ -38,5 +38,5 @@ def estimate_focus_from_gaussians(gaussians, top_ratio: float = 0.05):
 
         return center.numpy().astype(np.float32), float(radius)
     except Exception as e:
-        print(f"[GUI] estimate_focus_from_gaussians 失败，退回默认值: {e}")
+        print(f"[GUI] estimate_focus_from_gaussians filed, back to default: {e}")
         return np.zeros(3, dtype=np.float32), 2.0

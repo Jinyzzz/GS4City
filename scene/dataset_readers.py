@@ -32,7 +32,6 @@ class CameraInfo(NamedTuple):
     image_name: str
     width: int
     height: int
-    # 加一个默认值，这样 Blender/NeRF 那条分支可以不传 objects
     objects: np.ndarray = None
 
 
@@ -69,12 +68,6 @@ def getNerfppNorm(cam_info):
 
 
 def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, objects_folder):
-    """
-    这里负责给 CameraInfo 填 objects：
-      - 优先读取 <image_name>.npy（你现在 fused_mask 下的格式）
-      - 如果没有 .npy，再退回 <image_name>.png
-      - 读到的是灰度实例 id，shape = [H, W]，整型
-    """
     cam_infos = []
     for idx, key in enumerate(cam_extrinsics):
         sys.stdout.write('\r')
@@ -109,14 +102,12 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, objects_fol
         image_name = os.path.basename(image_path).split(".")[0]
         image = Image.open(image_path) if os.path.exists(image_path) else None
 
-        # ====== 关键修改：objects 支持 .npy + .png ======
         mask_npy = os.path.join(objects_folder, image_name + ".npy")
         mask_png = os.path.join(objects_folder, image_name + ".png")
         objects = None
 
         if os.path.exists(mask_npy):
             arr = np.load(mask_npy)
-            # 如果是 HxWxC 就取第一通道
             if arr.ndim == 3:
                 arr = arr[..., 0]
             objects = arr.astype(np.int32)
@@ -188,7 +179,6 @@ def readColmapSceneInfo(path, images, eval, object_path,
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
     reading_dir = "images" if images is None else images
-    # ★ 这里已经支持外面传 object_path（lift 那边会强制设成 "fused_mask"）
     object_dir = 'fused_mask' if object_path is None else object_path
 
     cam_infos_unsorted = readColmapCameras(
@@ -199,7 +189,6 @@ def readColmapSceneInfo(path, images, eval, object_path,
     )
     cam_infos = sorted(cam_infos_unsorted.copy(), key=lambda x: x.image_name)
 
-    # ========= 后面原样 =========
     if train_split:
         assert eval, "Train split only makes sense when evaluating the model"
         assert "lerf_mask" in path, "Train split only makes sense when using the LERF-mask dataset"
@@ -377,7 +366,7 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
                     image_name=image_name,
                     width=image.size[0],
                     height=image.size[1],
-                    objects=None,   # NeRF synthetic 没有 mask，显式写 None
+                    objects=None,
                 )
             )
 

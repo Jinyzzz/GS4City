@@ -1,19 +1,16 @@
 #
-# Copyright (C) 2024, Gaga
-# Gaga research group, https://github.com/weijielyu/Gaga
+# Copyright (C) 2026, CityGMLGaussian
 # All rights reserved.
 #
 # ------------------------------------------------------------------------
-# Modified from codes in Gaussian-Splatting 
-# GRAPHDECO research group, https://team.inria.fr/graphdeco
+# Modified from codes in Gaga
+# Gaga research group, https://github.com/weijielyu/Gaga
 #
 
 from argparse import ArgumentParser, Namespace
 import sys
 import os
 
-
-# === 根目录推断：以当前文件为基准，向上一层就是 repo 根（workspace/Gaga） ★★★
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DATASET_ROOT = os.path.join(REPO_ROOT, "dataset")
 MODEL_ROOT   = os.path.join(REPO_ROOT, "model")
@@ -57,15 +54,13 @@ class ModelParams(ParamGroup):
     def __init__(self, parser, sentinel=False):
         self.sh_degree = 3
 
-        # ===== 新增的“纯名字”参数（用户输入）——注意这里没有下划线！！！ =====
-        self.scene = ""   # -> 只注册 --scene，没有 -s
-        self.model = ""   # -> 只注册 --model，没有 -m
-        self.output = ""  # -> 只注册 --output，没有 -o
+        self.scene = ""  
+        self.model = ""  
+        self.output = ""
 
-        # ===== 内部使用的真实路径（保持兼容） =====
-        self._source_path = ""          # -> --source_path / -s
-        self._model_path = ""           # -> --model_path / -m
-        self._trained_model_path = ""   # -> --trained_model_path / -t 之类
+        self._source_path = ""
+        self._model_path = ""
+        self._trained_model_path = ""
 
         self._images = "images"
         self._resolution = -1
@@ -83,26 +78,14 @@ class ModelParams(ParamGroup):
     def extract(self, args):
         g = super().extract(args)
 
-        # ========== 统一路径规则（只在这里拼路径） ★★★ ==========
-        #
-        #   scene  -> source_path = <REPO_ROOT>/dataset/<scene>
-        #   model  -> model_path  = <REPO_ROOT>/model/<model>
-        #   output -> trained_model_path = <REPO_ROOT>/output/<output>
-        #
-        #   同时保留老的用法：
-        #   - 如果 cfg_args 里已经有 source_path / model_path / trained_model_path，
-        #     而且命令行没传 scene/model/output，就直接用 cfg_args 里的绝对路径。
-
         # ---- source_path / scene ----
         scene_name = getattr(g, "scene", "")
-        if scene_name:  # 用户 / cfg_args 里有 scene
+        if scene_name:
             g.source_path = os.path.join(DATASET_ROOT, scene_name)
         else:
-            # 保留 cfg_args 里的 source_path（如果有的话）
             if getattr(g, "source_path", ""):
                 g.source_path = os.path.abspath(g.source_path)
             else:
-                # 都没有就默认 dataset 根（不强制要求）
                 g.source_path = DATASET_ROOT
 
         # ---- model_path / model ----
@@ -112,7 +95,6 @@ class ModelParams(ParamGroup):
         else:
             if getattr(g, "model_path", ""):
                 g.model_path = os.path.abspath(g.model_path)
-            # 否则保持为空，由上层决定要不要强制要求
 
         # ---- trained_model_path / output ----
         output_name = getattr(g, "output", "")
@@ -121,9 +103,7 @@ class ModelParams(ParamGroup):
         else:
             if getattr(g, "trained_model_path", ""):
                 g.trained_model_path = os.path.abspath(g.trained_model_path)
-            # 否则保持为空
 
-        # 最终确保 source_path 是绝对路径（你原来的行为）
         g.source_path = os.path.abspath(g.source_path)
 
         return g
@@ -176,27 +156,20 @@ class RenderParams(ParamGroup):
 
 
 def get_combined_args(parser: ArgumentParser):
-    """
-    先解析命令行，然后尝试从 <model 根>/model/<model>/cfg_args 读配置，
-    再用命令行覆盖 cfg_args 中的同名参数。
-    """
     cmdlne_string = sys.argv[1:]
     cfgfile_string = "Namespace()"
     args_cmdline = parser.parse_args(cmdlne_string)
 
     cfgfilepath = None
 
-    # ==== 优先级：显式 model_path > model 名字 ★★★ ====
     try:
         model_dir = None
 
-        # 1) 老用法：直接给 --model_path（绝对路径或相对路径）
         if hasattr(args_cmdline, "model_path") and args_cmdline.model_path:
             model_dir = args_cmdline.model_path
             if not os.path.isabs(model_dir):
                 model_dir = os.path.abspath(model_dir)
 
-        # 2) 新用法：只给 --model 名字，我们拼到 REPO_ROOT/model/<model>
         elif hasattr(args_cmdline, "model") and args_cmdline.model:
             model_dir = os.path.join(MODEL_ROOT, args_cmdline.model)
 

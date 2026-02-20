@@ -1,6 +1,0 @@
-{
-  "removal_thresh": 0.3,
-  "select_obj_id": [1610],
-  "lambda_dlpips": 0.5,
-  "finetune_iteration": 5000
-}

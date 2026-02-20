@@ -1,4 +1,8 @@
-# semantic_viewer/orbit_camera.py
+#
+# Copyright (C) 2026, CityGMLGaussian
+# All rights reserved.
+#
+
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
@@ -18,7 +22,6 @@ class OrbitCamera:
         self.translate = np.array([0, 0, self.radius])
         self.scale_f = 1.0
 
-        # 1：以相机中心绕场景旋转
         self.rot_mode = 1
 
     @property
@@ -32,7 +35,6 @@ class OrbitCamera:
 
         res[:3, 3] -= self.center
 
-        # 转换到 Gaussian-Splatting 使用的 [R | -R^T t] 约定
         res[:3, 3] = -rot[:3, :3].transpose() @ res[:3, 3]
 
         return res
@@ -77,7 +79,6 @@ class OrbitCamera:
         self.rot = R.from_rotvec(rotvec_x) * R.from_rotvec(rotvec_y) * self.rot
 
     def scale(self, delta):
-        # 非线性指数缩放
         self.radius *= 1.2 ** (-delta)
         self.radius = float(np.clip(self.radius, 0.05, 1e3))
 

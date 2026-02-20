@@ -197,16 +197,13 @@ class SamAutomaticMaskGenerator:
 
         # Remove duplicate masks between crops
         if len(crop_boxes) > 1:
-            # 可能某些图/某些层完全没产生 mask，这时 MaskData 里就不会有 boxes/crop_boxes
             try:
                 boxes = data["boxes"]
                 crop_boxes_tensor = data["crop_boxes"]
             except KeyError:
-                # 没有任何可用于 NMS 的数据，直接返回
                 return data
 
             if len(boxes) > 0 and len(crop_boxes_tensor) > 0:
-                # Prefer masks from smaller crops: 用 crop 区域面积的倒数打分
                 scores = 1.0 / box_area(crop_boxes_tensor)
                 scores = scores.to(boxes.device)
 
@@ -270,7 +267,6 @@ class SamAutomaticMaskGenerator:
         data["boxes"] = uncrop_boxes_xyxy(data["boxes"], crop_box)
         data["points"] = uncrop_points(data["points"], crop_box)
 
-        # 为跨 crop 的 NMS 记录每个 mask 对应的 crop_box
         try:
             boxes = data["boxes"]
         except KeyError:
@@ -283,7 +279,6 @@ class SamAutomaticMaskGenerator:
                 dtype=boxes.dtype,
             )
         else:
-            # 即使没有 box，也放一个空 tensor，避免后面使用时出错
             data["crop_boxes"] = torch.empty(
                 (0, 4),
                 device=self.predictor.device,

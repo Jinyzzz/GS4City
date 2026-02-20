@@ -1,11 +1,15 @@
-# semantic_viewer/dpg_gui.py
+#
+# Copyright (C) 2026, CityGMLGaussian
+# All rights reserved.
+#
+
 import math
 import numpy as np
 import torch
 import torch.nn.functional as F
 import os
 
-from instance_query import InstanceQueryEngine
+from semantic_viewer.instance_query import InstanceQueryEngine
 import dearpygui.dearpygui as dpg
 from typing import Optional
 from gaussian_renderer import render
@@ -67,24 +71,24 @@ class SemanticGaussianGUI:
             self.train_cam_names.append(f"{idx}: {name}")
         self.active_train_cam_idx = 0
 
-        # Reset View 初始值
+        # Initial values for "Reset View"
         self.init_center = self.camera.center.copy()
         self.init_radius = float(radius)
 
-        # 渲染缓冲
+        # Render buffer
         self.render_buffer = np.zeros((self.height, self.width, 3), dtype=np.float32)
         self.mode = "RGB"  # "RGB" / "Segmentation" / "Overlay"
 
-        # 调色板
+        # Color palette
         self.class_colors = build_color_map(self.num_classes) if self.num_classes > 0 else None
 
-        # label maps
+        # Label maps
         self.label_map_compact = None
         self.label_map_orig = None
         self.label_H = None
         self.label_W = None
 
-        # 语义层级管理
+        # Semantic hierarchy manager
         self.hierarchy = HierarchyManager(
             grayid_to_cityobject=grayid_to_cityobject,
             city_semantics=city_semantics,
@@ -93,7 +97,7 @@ class SemanticGaussianGUI:
             rooftype_map=building_rooftype_map,
         )
 
-        # 语义查询引擎（CityGML + CLIP）
+        # Semantic query engine (CityGML + CLIP)
         self.query_engine: Optional[InstanceQueryEngine] = None
         self.model_root = model_root
 
@@ -105,7 +109,7 @@ class SemanticGaussianGUI:
             if os.path.exists(id_mapping_path) and os.path.exists(city_semantics_path):
                 if os.path.exists(clip_index_path):
                     try:
-                        print(f"[GUI] 初始化 InstanceQueryEngine: {id_mapping_path}, {city_semantics_path}, {clip_index_path}")
+                        print(f"[GUI] Initializing InstanceQueryEngine: {id_mapping_path}, {city_semantics_path}, {clip_index_path}")
                         self.query_engine = InstanceQueryEngine(
                             id_mapping_path=id_mapping_path,
                             city_semantics_path=city_semantics_path,
@@ -114,34 +118,34 @@ class SemanticGaussianGUI:
                         )
                         print("[GUI] Query engine ready (CityGML + CLIP).")
                     except Exception as e:
-                        print(f"[GUI] 初始化 Query engine 失败: {e}")
+                        print(f"[GUI] Failed to initialize query engine: {e}")
                 else:
                     try:
-                        # 只有 CityGML 的简单版本：你可以做一个只读 CityGML 的 mini engine，
-                        # 或者暂时只打印提示
-                        print("[GUI] 未找到 object_clip_index.npz，只能用 CityGML type 查询。")
+                        # CityGML-only fallback: you can implement a lightweight CityGML-only engine,
+                        # or keep it as a warning for now.
+                        print("[GUI] object_clip_index.npz not found; only CityGML type queries are available.")
                         self.query_engine = InstanceQueryEngine(
                             id_mapping_path=id_mapping_path,
                             city_semantics_path=city_semantics_path,
-                            object_clip_index_path=clip_index_path,  # 如果没有可以不建，或者自己写个 CityGML-only 版本
+                            object_clip_index_path=clip_index_path,
                         )
                     except Exception as e:
-                        print(f"[GUI] 初始化 CityGML-only Query engine 失败: {e}")
+                        print(f"[GUI] Failed to initialize CityGML-only query engine: {e}")
             else:
-                print("[GUI] Query engine 所需的 id_mapping.json / city_semantics.json 不存在，查询功能不可用。")
+                print("[GUI] Required id_mapping.json / city_semantics.json not found; query is unavailable.")
 
-        # 高亮参数
+        # Highlight parameters
         self.highlight_color = np.array([1.0, 0.0, 0.0], dtype=np.float32)
         self.highlight_alpha = 0.6
 
         self.load_model = True
 
-        # 鼠标状态
+        # Mouse state
         self.moving = False
         self.moving_middle = False
         self.mouse_pos = (0, 0)
 
-        # DPG 初始化
+        # DPG initialization
         dpg.create_context()
         self.register_dpg()
 
@@ -151,7 +155,7 @@ class SemanticGaussianGUI:
         except Exception:
             pass
 
-    # ---------- 相机 / UI 控制 ----------
+    # ---------- Camera / UI controls ----------
     def set_initial_center(self, center_np: np.ndarray, radius: float = None):
         try:
             center_np = np.asarray(center_np, dtype=np.float32).reshape(3,)
@@ -160,9 +164,9 @@ class SemanticGaussianGUI:
             if radius is not None:
                 self.camera.radius = float(radius)
                 self.init_radius = float(radius)
-            print(f"[GUI] 初始相机中心设置为 {center_np}, 半径={self.init_radius:.3f}")
+            print(f"[GUI] Initial camera center set to {center_np}, radius={self.init_radius:.3f}")
         except Exception as e:
-            print(f"[GUI] set_initial_center 失败: {e}")
+            print(f"[GUI] set_initial_center failed: {e}")
 
     def set_render_mode(self, mode: str):
         self.mode = mode
@@ -171,11 +175,11 @@ class SemanticGaussianGUI:
         self.camera.center = self.init_center.copy()
         self.camera.radius = float(self.init_radius)
         self.use_train_cam = False
-        print("[GUI] 视角已重置到 Orbit 初始视角")
+        print("[GUI] View reset to the initial Orbit view")
 
     def set_use_train_cam(self, flag: bool):
         self.use_train_cam = bool(flag)
-        print(f"[GUI] 使用训练相机: {self.use_train_cam}")
+        print(f"[GUI] Use train camera: {self.use_train_cam}")
 
     def zoom_step(self, delta: int):
         self.camera.scale(delta)
@@ -191,24 +195,24 @@ class SemanticGaussianGUI:
             idx_str = display_name.split(":", 1)[0]
             idx = int(idx_str)
         except Exception:
-            print(f"[GUI] 解析训练相机索引失败: {display_name}")
+            print(f"[GUI] Failed to parse train camera index: {display_name}")
             return
 
         if 0 <= idx < len(self.train_cameras):
             self.active_train_cam_idx = idx
             self.use_train_cam = True
-            print(f"[GUI] 切换到训练相机 #{idx}: {display_name}")
+            print(f"[GUI] Switched to train camera #{idx}: {display_name}")
         else:
-            print(f"[GUI] 训练相机索引越界: {idx}")
+            print(f"[GUI] Train camera index out of range: {idx}")
 
     def set_mask_level(self, level: int):
-        # 把值传给 HierarchyManager，让它负责计算高亮
+        # Pass the value to HierarchyManager; it computes the highlight set
         self.hierarchy.set_mask_level(level)
-        print(f"[GUI] 更新 mask 层级: {self.hierarchy.mask_level}")
+        print(f"[GUI] Updated mask hierarchy level: {self.hierarchy.mask_level}")
 
     def search_and_focus(self, query: str):
         if not query:
-            print("[GUI] search_and_focus: 空查询")
+            print("[GUI] search_and_focus: empty query")
             return
         print(f"[GUI] [TODO] search_and_focus: {query}")
 
@@ -218,18 +222,18 @@ class SemanticGaussianGUI:
         dpg.set_value("_selection_info_text", "No selection yet.")
 
     def run_text_query(self):
-        # 1. 检查前置条件
+        # 1. Check prerequisites
         if self.query_engine is None:
-            print("[GUI] Query engine 未初始化（缺少 id_mapping / city_semantics / CLIP 索引？）")
+            print("[GUI] Query engine not initialized (missing id_mapping / city_semantics / CLIP index?)")
             return
 
         desc = dpg.get_value("_query_description_input").strip()
         if not desc:
-            print("[GUI] run_text_query: 空描述")
+            print("[GUI] run_text_query: empty description")
             return
 
         if self.label_map_orig is None:
-            print("[GUI] 当前视图还没有 label_map_orig（可能没跑 classifier？），无法查询。")
+            print("[GUI] label_map_orig is not available for the current view (classifier not run?), cannot query.")
             return
 
         thr = dpg.get_value("_query_threshold_slider")
@@ -242,14 +246,14 @@ class SemanticGaussianGUI:
                 similarity_threshold=float(thr),
             )
         except Exception as e:
-            print(f"[GUI] Query 出错: {e}")
+            print(f"[GUI] Query error: {e}")
             return
 
-        # 2. 从 mask 中找出所有匹配的 instance（灰度 id）
+        # 2. Collect all matched instances (gray ids) from the mask
         selected_ids = np.unique(inst_img[mask.astype(bool)])
-        selected_ids = selected_ids[selected_ids != 0]  # 去掉背景 0
+        selected_ids = selected_ids[selected_ids != 0]  # remove background 0
 
-        # 3. 更新高亮集合（用灰度 id）
+        # 3. Update highlight set (gray ids)
         if selected_ids.size == 0:
             self.hierarchy.highlight_gray_ids = None
             dpg.set_value(
@@ -261,7 +265,7 @@ class SemanticGaussianGUI:
 
         self.hierarchy.highlight_gray_ids = set(int(i) for i in selected_ids)
 
-        # 4. 更新右侧信息栏（不选具体一个 object，而是显示查询统计）
+        # 4. Update right-side info panel (show query stats rather than selecting one object)
         info_text = "\n".join([
             f"Query: {desc}",
             f"Route: {route}",
@@ -271,11 +275,11 @@ class SemanticGaussianGUI:
 
         print(f"[GUI] Query '{desc}' via {route}: highlighted {len(selected_ids)} instances.")
 
-    # ---------- DearPyGUI 注册 ----------
+    # ---------- DearPyGUI registration ----------
     def register_dpg(self):
-        RIGHT_PANEL_WIDTH = 400  # 比原来的 320 更宽；你可以改成 380 / 420 等
+        RIGHT_PANEL_WIDTH = 400
         RIGHT_PANEL_X = self.window_width + 10
-        # 纹理
+        # Texture
         with dpg.texture_registry(show=False):
             dpg.add_raw_texture(
                 self.width,
@@ -285,14 +289,14 @@ class SemanticGaussianGUI:
                 tag="_texture",
             )
 
-        # 主窗口
+        # Main window
         with dpg.window(tag="_primary_window", width=self.window_width, height=self.window_height):
             dpg.add_image("_texture")
 
         dpg.set_primary_window("_primary_window", True)
 
-        # --------- 窗口 1：Building / Selection（始终展开，无滚轮） ---------
-        INFO_HEIGHT = 300  # 你可以按需要微调，比如 280
+        # --------- Window 1: Building / Selection (always expanded, no scrolling) ---------
+        INFO_HEIGHT = 300
 
         with dpg.window(
             label="Building / Selection",
@@ -302,9 +306,9 @@ class SemanticGaussianGUI:
             pos=[self.window_width + 10, 0],
             no_move=True,
             no_resize=True,
-            no_collapse=True,   # 不允许折叠
+            no_collapse=True,
             no_close=True,
-            no_scrollbar=True,  # 不要滚动条
+            no_scrollbar=True,
         ):
             dpg.add_text("Building Info")
             dpg.add_input_text(
@@ -333,8 +337,8 @@ class SemanticGaussianGUI:
                     callback=lambda: self.clear_selection()
                 )
 
-        # --------- 窗口 2：Controls（View + Interaction + Search，可折叠，有滚轮） ---------
-        CONTROLS_HEIGHT = self.window_height - INFO_HEIGHT - 20  # 20 像素留个间距
+        # --------- Window 2: Controls (View + Interaction + Search, collapsible, scrollable) ---------
+        CONTROLS_HEIGHT = self.window_height - INFO_HEIGHT - 20
 
         with dpg.window(
             label="Controls",
@@ -345,9 +349,8 @@ class SemanticGaussianGUI:
             no_move=True,
             no_resize=True,
             no_close=True,
-            # 注意：不写 no_collapse / no_scrollbar => 默认可折叠 + 有滚轮
         ):
-            # --- View & Camera 部分 ---
+            # --- View & Camera ---
             dpg.add_text("Render Mode")
             dpg.add_radio_button(
                 items=["RGB", "Segmentation", "Overlay"],
@@ -433,7 +436,7 @@ class SemanticGaussianGUI:
             dpg.add_separator()
             dpg.add_spacer(height=4)
 
-            # --- Interaction / Mask 部分 ---
+            # --- Interaction / Mask ---
             dpg.add_text("Mouse position: ", tag="pos_item")
 
             dpg.add_spacer(height=4)
@@ -457,7 +460,7 @@ class SemanticGaussianGUI:
             dpg.add_input_text(
                 label="Description",
                 tag="_query_description_input",
-                width=RIGHT_PANEL_WIDTH - 60,   # 或者固定 260
+                width=RIGHT_PANEL_WIDTH - 60,
             )
             dpg.add_slider_float(
                 label="Similarity Threshold (CLIP)",
@@ -472,9 +475,7 @@ class SemanticGaussianGUI:
                 callback=lambda: self.run_text_query(),
             )
 
-
-
-        # 去 padding
+        # Remove padding
         with dpg.theme() as theme_no_padding:
             with dpg.theme_component(dpg.mvAll):
                 dpg.add_theme_style(dpg.mvStyleVar_WindowPadding, 0, 0, category=dpg.mvThemeCat_Core)
@@ -482,7 +483,7 @@ class SemanticGaussianGUI:
                 dpg.add_theme_style(dpg.mvStyleVar_CellPadding, 0, 0, category=dpg.mvThemeCat_Core)
         dpg.bind_item_theme("_primary_window", theme_no_padding)
 
-        # ------- 鼠标 & 交互 handler -------
+        # ------- Mouse & interaction handlers -------
         def callback_camera_wheel_scale(sender, app_data):
             if not dpg.is_item_focused("_primary_window"):
                 return
@@ -551,7 +552,7 @@ class SemanticGaussianGUI:
                 else:
                     orig_id = new_id
 
-                # 灰度 0 = 背景，不选中
+                # Gray id 0 = background, do not select
                 if orig_id == 0:
                     print("[GUI] Click on background (gray id 0), ignore.")
                     return
@@ -593,7 +594,7 @@ class SemanticGaussianGUI:
         dpg.setup_dearpygui()
         dpg.show_viewport()
 
-    # ---------- 构造相机 ----------
+    # ---------- Camera construction ----------
     def construct_camera(self) -> Camera:
         pose = self.camera.pose
         R_c2w = pose[:3, :3]
@@ -619,7 +620,7 @@ class SemanticGaussianGUI:
         cam.feature_height, cam.feature_width = self.height, self.width
         return cam
 
-    # ---------- 渲染 ----------
+    # ---------- Rendering ----------
     @torch.no_grad()
     def fetch_and_render(self, view_camera: Camera):
         render_pkg = render(view_camera, self.gaussians, self.pipe, self.background)
@@ -652,7 +653,7 @@ class SemanticGaussianGUI:
             self.label_map_orig = None
             self.label_H, self.label_W = src_H, src_W
 
-        # 模式混合
+        # Mode blending
         if self.mode == "RGB" or seg_rgb is None:
             out = rgb
         elif self.mode == "Segmentation":
@@ -664,7 +665,7 @@ class SemanticGaussianGUI:
         else:
             out = rgb
 
-        # 高亮
+        # Highlight
         if (self.hierarchy.highlight_gray_ids is not None) and (self.label_map_orig is not None):
             mask = np.isin(self.label_map_orig, list(self.hierarchy.highlight_gray_ids))
             if mask.any():
@@ -673,9 +674,7 @@ class SemanticGaussianGUI:
                 out[mask] = alpha_h * self.highlight_color + (1.0 - alpha_h) * out[mask]
                 out = np.clip(out, 0.0, 1.0)
 
-
-
-        # resize 到 GUI 分辨率
+        # Resize to GUI resolution
         if src_H != self.height or src_W != self.width:
             out_t = torch.from_numpy(out).permute(2, 0, 1).unsqueeze(0)
             out_t = F.interpolate(out_t, size=(self.height, self.width), mode="nearest")
@@ -684,7 +683,7 @@ class SemanticGaussianGUI:
         self.render_buffer = out.reshape(-1).astype(np.float32)
         dpg.set_value("_texture", self.render_buffer)
 
-    # ---------- 主循环 ----------
+    # ---------- Main loop ----------
     def render_loop(self):
         while dpg.is_dearpygui_running():
             if self.load_model:

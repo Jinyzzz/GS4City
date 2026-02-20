@@ -1,12 +1,16 @@
-# semantic_viewer/hierarchy.py
+#
+# Copyright (C) 2026, CityGMLGaussian
+# All rights reserved.
+#
+
 from typing import Dict, Any, Optional, Set, List
 
 class HierarchyManager:
     """
-    负责：
-    - 灰度 id -> CityObject id -> 层级链
-    - 计算当前 mask_level 下应高亮的灰度 id 集合
-    - 生成 Building Info & Selection Info 的文本
+    Responsibilities:
+    - gray id -> CityObject id -> hierarchy chain
+    - compute the set of gray ids to highlight under the current mask_level
+    - generate text for Building Info & Selection Info
     """
 
     def __init__(
@@ -27,17 +31,17 @@ class HierarchyManager:
         self.city_to_grayids: Dict[str, list] = {}
         self.city_descendants_cache: Dict[str, Set[str]] = {}
 
-        # 当前选择状态
+        # Current selection state
         self.current_hierarchy_chain: Optional[List[str]] = None
         self.highlight_gray_ids: Optional[Set[int]] = None
 
-        # 建 parent/children
+        # Build parent/children links
         for cid, data in self.city_semantics.items():
             parent = data.get("parent")
             if parent is not None:
                 self.city_children.setdefault(parent, []).append(cid)
 
-        # 建 city -> gray ids
+        # Build city -> gray ids
         for gid, cid in self.grayid_to_cityobject.items():
             self.city_to_grayids.setdefault(cid, []).append(gid)
 
@@ -49,25 +53,25 @@ class HierarchyManager:
 
         self._build_feature_maps()
 
-    # ---------- 内部工具 ----------
+    # ---------- Internal helpers ----------
     def _build_feature_maps(self):
-        """从 city_semantics + city_to_grayids 预计算 feature/surface/part 对应的灰度集合。"""
+        """Precompute gray-id sets for feature/surface/part from city_semantics + city_to_grayids."""
         for cid, data in self.city_semantics.items():
             attrs = data.get("attributes", {}) or {}
             f = attrs.get("feature", None)
             s = attrs.get("surface", None)
             p = attrs.get("part", None)
 
-            # 这个 cityobject 覆盖的所有灰度 id
+            # All gray ids covered by this cityobject
             gids = self.city_to_grayids.get(cid, [])
             if not gids:
                 continue
 
             if f is None:
-                # 没有 feature，就没办法按 feature 分级，跳过
+                # Without feature, we cannot build feature-based hierarchy; skip
                 continue
 
-            # level 2: 只按 feature
+            # level 2: feature only
             key_f = (str(f),)
             self.feature_to_grayids.setdefault(key_f, set()).update(gids)
 
@@ -83,7 +87,7 @@ class HierarchyManager:
 
 
     def _get_hierarchy_chain(self, leaf_city_id: str):
-        """从叶子一直向上：leaf -> parent -> ... -> root"""
+        """Traverse from leaf upwards: leaf -> parent -> ... -> root."""
         if leaf_city_id is None or leaf_city_id not in self.city_semantics:
             return None
 
@@ -135,24 +139,24 @@ class HierarchyManager:
             cid = data.get("parent")
         return None
 
-    # ---------- 外部接口 ----------
+    # ---------- Public API ----------
     def set_mask_level(self, level: int):
         self.mask_level = max(0, int(level))
-        # 如果之前点过某个像素，则换 level 的时候重新算一次高亮
+        # If a pixel was clicked before, recompute highlight when switching levels
         if self.last_clicked_gray_id is not None:
             self._compute_highlight_for_gray(self.last_clicked_gray_id)
 
     def _compute_highlight_for_gray(self, gray_id: int):
         """
-        根据当前 mask_level 和点击的灰度 id，更新 self.highlight_gray_ids。
+        Update self.highlight_gray_ids based on the current mask_level and the clicked gray id.
 
-        规则（基于 CityObject 层级）：
-        - gray_id == 0: 背景，不高亮
-        - gray_id 无映射：高亮自己（所有 level 都一样）
-        - 有映射：
-          level 0: 只高亮叶子 cityobject 自身
-          level 1: 高亮“所在墙面”（WallSurface）及其所有子对象
-          level 2: 高亮整栋建筑（Building）及其所有子对象
+        Rules (CityObject-hierarchy based):
+        - gray_id == 0: background, no highlight
+        - no mapping for gray_id: highlight itself (same for all levels)
+        - has mapping:
+          level 0: highlight only the leaf cityobject itself
+          level 1: highlight the containing "wall surface" (WallSurface) and all its descendants
+          level 2: highlight the whole building (Building) and all its descendants
         """
         if gray_id == 0:
             self.highlight_gray_ids = None
@@ -160,7 +164,7 @@ class HierarchyManager:
 
         leaf_city_id = self.grayid_to_cityobject.get(gray_id, None)
 
-        # 映射不到任何 CityObject：未知物体，所有 level 都高亮自己
+        # No CityObject mapping: unknown object, always highlight itself
         if leaf_city_id is None or leaf_city_id not in self.city_semantics:
             self.highlight_gray_ids = {gray_id}
             return
@@ -168,7 +172,7 @@ class HierarchyManager:
         level = self.mask_level
         selected: Set[int] = set()
 
-        # ---------- level 0: 只叶子 ----------
+        # ---------- level 0: leaf only ----------
         if level == 0:
             gids = self.city_to_grayids.get(leaf_city_id, [])
             if gids:
@@ -176,29 +180,29 @@ class HierarchyManager:
             else:
                 selected.add(gray_id)
 
-        # ---------- level 1: 所在墙面（WallSurface） ----------
+        # ---------- level 1: containing wall surface (WallSurface) ----------
         elif level == 1:
             wall_id = self._find_wall_for_leaf(leaf_city_id)
             if wall_id is None:
-                # 找不到墙面，就退化成 level 0
+                # If no wall surface found, fall back to level 0
                 gids = self.city_to_grayids.get(leaf_city_id, [])
                 if gids:
                     selected.update(gids)
                 else:
                     selected.add(gray_id)
             else:
-                # 墙面 + 它所有子对象
+                # Wall surface + all descendants
                 all_cities: Set[str] = {wall_id}
                 all_cities |= self._get_descendants(wall_id)
                 for cid in all_cities:
                     for gid in self.city_to_grayids.get(cid, []):
                         selected.add(gid)
 
-        # ---------- level 2: 整栋建筑 ----------
+        # ---------- level 2: whole building ----------
         else:
             building_id = self._find_building_for_leaf(leaf_city_id)
             if building_id is None:
-                # 找不到 building，就退化成 level 1 的逻辑
+                # If no building found, fall back to level 1 logic
                 wall_id = self._find_wall_for_leaf(leaf_city_id)
                 if wall_id is None:
                     gids = self.city_to_grayids.get(leaf_city_id, [])
@@ -213,7 +217,7 @@ class HierarchyManager:
                         for gid in self.city_to_grayids.get(cid, []):
                             selected.add(gid)
             else:
-                # building + 全部后代
+                # Building + all descendants
                 all_cities: Set[str] = {building_id}
                 all_cities |= self._get_descendants(building_id)
                 for cid in all_cities:
@@ -230,26 +234,26 @@ class HierarchyManager:
     def handle_click(self, gray_id: int) -> Dict[str, Any]:
         self.last_clicked_gray_id = gray_id
 
-        # 先按当前 mask_level 计算高亮集合
+        # First compute highlight set according to the current mask_level
         self._compute_highlight_for_gray(gray_id)
 
         leaf_city_id = self.grayid_to_cityobject.get(gray_id, None)
         building_id = self._find_building_for_leaf(leaf_city_id)
 
-        # ---------- Building Info 文本（和之前一致，只是高度/层/映射那套） ----------
+        # ---------- Building Info text ----------
         if building_id is not None:
             bdata = self.city_semantics.get(building_id, {})
             attrs = bdata.get("attributes", {}) or {}
 
-            # Height + m
+            # Height in meters
             h_val = attrs.get("measuredHeight", None)
             height_str = "N/A" if h_val is None else f"{h_val} m"
 
-            # Storeys + 层
+            # Storeys above ground
             s_val = attrs.get("storeysAboveGround", None)
             storeys_str = "N/A" if s_val is None else f"{s_val} floors"
 
-            # Function 映射
+            # Function mapping
             raw_func = attrs.get("function", None)
             if raw_func is None:
                 func_str = "N/A"
@@ -264,7 +268,7 @@ class HierarchyManager:
                     key = str(raw_func)
                     func_str = self.function_map.get(key, key)
 
-            # RoofType 映射
+            # RoofType mapping
             raw_roof = attrs.get("roofType", None)
             if raw_roof is None:
                 roof_str = "N/A"
@@ -289,7 +293,7 @@ class HierarchyManager:
         else:
             building_text = "No building info for this selection."
 
-        # ---------- Selection Info 文本 ----------
+        # ---------- Selection Info text ----------
         if leaf_city_id is not None and leaf_city_id in self.city_semantics:
             sdata = self.city_semantics.get(leaf_city_id, {})
 
@@ -299,7 +303,7 @@ class HierarchyManager:
                 f"Type: {sdata.get('type', 'N/A')}",
             ])
         else:
-            # 没有语义映射的物体：只显示灰度值
+            # Object without semantic mapping: only show gray id
             selection_text = "\n".join([
                 f"Gray ID: {gray_id}",
                 "CityObject ID: N/A",
@@ -310,7 +314,7 @@ class HierarchyManager:
             "building_text": building_text,
             "selection_text": selection_text,
             "leaf_city_id": leaf_city_id,
-            "target_city_id": leaf_city_id,  # 现在不再用 parent 层级了，简化
+            "target_city_id": leaf_city_id,
             "building_id": building_id,
         }
     def _find_building_for_leaf(self, leaf_city_id: Optional[str]) -> Optional[str]:
@@ -327,8 +331,8 @@ class HierarchyManager:
 
     def _find_wall_for_leaf(self, leaf_city_id: Optional[str]) -> Optional[str]:
         """
-        从叶子一路往上找第一个 type == 'WallSurface' 的对象，
-        作为“所在墙面”的代表。
+        Walk from the leaf upwards and return the first object whose type == 'WallSurface',
+        used as the representative "containing wall surface".
         """
         if leaf_city_id is None:
             return None
@@ -345,5 +349,3 @@ class HierarchyManager:
         self.current_hierarchy_chain = None
         self.highlight_gray_ids = None
         self.last_clicked_gray_id = None
-
-
