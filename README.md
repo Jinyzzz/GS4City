@@ -1,56 +1,297 @@
-# <img alt="image" src='media/lady-gaga.png' height="30px"> Gaga: Group Any Gaussians via 3D-aware Memory Bank
 
-[Weijie Lyu](https://weijielyu.github.io/), [Xueting Li](https://sunshineatnoon.github.io/), [Abhijit Kundu](https://abhijitkundu.info/), [Yi-Hsuan Tsai](https://sites.google.com/site/yihsuantsai/), [Ming-Hsuan Yang](https://faculty.ucmerced.edu/mhyang/)<br>
-University of California, Merced - NVIDIA Reaserch - Google DeepMind - Atmanity Inc.
+# CityGMLGaussian
 
-[![Website](https://img.shields.io/badge/Website-Gaga?logo=googlechrome&logoColor=hsl(204%2C%2086%25%2C%2053%25)&label=Gaga&labelColor=%23f5f5dc&color=hsl(204%2C%2086%25%2C%2053%25))](https://weijielyu.github.io/Gaga/)
-[![Paper](https://img.shields.io/badge/Paper-arXiv?logo=arxiv&logoColor=%23B31B1B&label=arXiv&labelColor=%23f5f5dc&color=%23B31B1B)](https://arxiv.org/abs/2404.07977)
-[![Video](https://img.shields.io/badge/Video-YouTube?logo=youtube&logoColor=%23FF0000&label=YouTube&labelColor=%23f5f5dc&color=%23FF0000)](https://www.youtube.com/watch?v=rqs5BuVFOok)
-<!-- [![Hits](https://hits.seeyoufarm.com/api/count/incr/badge.svg?url=https%3A%2F%2Fgithub.com%2Fweijielyu%2FGaga&count_bg=%2379C83D&title_bg=%23F5F5DC&icon=github.svg&icon_color=%2379C83D&title=🔎&edge_flat=false)](https://hits.seeyoufarm.com) -->
+**Author:** Jinyu Zhu
 
-<div align='center'>
-<img alt="image" src='media/teaser.png'>
-</div>
+> **Developed based on the following projects**
+> - [Gaga](https://github.com/weijielyu/Gaga)
+> - [Gaussian Grouping](https://github.com/lkeab/gaussian-grouping)
+> - [Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting)
 
-> *Gaga* groups any Gaussians in an open-world 3D scene and renders multi-view consistent class-agnostic segmentation.<br>
+A semantic processing pipeline based on **CityGML + multi-view images + Gaussian**, including:
 
-## Usage
-Please refer to [USAGE.md](https://github.com/weijielyu/Gaga/blob/main/USAGE.md) for installation and usage.
+- **SAM mask generation**
+- **Cross-view mask association** (unified instance IDs)
+- **Mask fusion** (SAM + CityGML)
+- **Semantic training**
+- **Rendering result export**
+- **GUI visualization**
 
-## Results
+---
 
-### 🗺️ Open-world 3D Segmentation
+## 1. Preprocessing (Before You Start)
 
-#### MipNeRF 360
+Before running this project, complete the following **3 preprocessing steps**.
 
-https://github.com/weijielyu/Gaga/assets/47323245/62a7ff01-30da-4c5e-ab79-c60c091935c1
+### Preprocessing 1: SfM (Reconstruct a Sparse Scene from Images)
 
-#### Replica
+Use an SfM tool (e.g., **COLMAP**) to reconstruct a sparse scene from multi-view images, and obtain:
 
-https://github.com/weijielyu/Gaga/assets/47323245/d0d5eece-c838-4be9-a3b9-71d051e97270
+- `sparse/0/cameras.bin`
+- `sparse/0/frames.bin`
+- `sparse/0/images.bin`
+- `sparse/0/points3D.bin`
 
-#### ScanNet
+---
 
-https://github.com/weijielyu/Gaga/assets/47323245/f1099e6b-40e1-46af-9c14-f480765065bf
+### Preprocessing 2: Train a 3DGS Scene with the Original Gaussian-Splatting Code
 
-### 🖌️ Scene Editing
+Use the **original Gaussian-Splatting code** to train a 3DGS scene, and place the trained model in:
 
-> ✨ Change the color of cushion on <img src="media/footstool.png" width="50"> to maroon 🟥<br>
-> ✨ Remove <img src="media/stuffed.png" width="50">
+- `model/<pretrained_model_name>/`
 
-https://github.com/weijielyu/Gaga/assets/47323245/803f049f-8930-445c-bc1a-b8bb12df0fbf
+---
 
-## Citation
+### Preprocessing 3: Obtain Masks and Semantic Files from CityGML
 
-If you find our work useful for your project, please consider citing our paper.
+Generate (or export) the following files from CityGML data:
+
+- `gml_mask/` (per-view `.npy` masks)
+- `gml_mask_vis/` (corresponding visualization images)
+- `city_semantics.json`
+- `id_mapping.json`
+
+---
+
+## 2. Project Directory Setup (Before Running This Project)
+
+The project root is recommended to look like this (including the `dataset/<scene_name>/` structure):
+
+```text
+your_project/
+├─ dataset/
+│  └─ <scene_name>/
+│     ├─ images/
+│     ├─ gml_mask/
+│     ├─ gml_mask_vis/
+│     ├─ sparse/
+│     │  └─ 0/
+│     │     ├─ cameras.bin
+│     │     ├─ frames.bin
+│     │     ├─ images.bin
+│     │     └─ points3D.bin
+│     ├─ city_semantics.json
+│     └─ id_mapping.json
+├─ model/                    # Pretrained 3DGS models
+├─ weight/                   # SAM pretrained weights
+├─ output/                   # Empty output directory (training/rendering results will be written here)
+└─ ...
+````
+
+### Requirements
+
+* Filenames in `images/`, `gml_mask/`, and `gml_mask_vis/` must correspond **one-to-one** (same basename, different extensions).
+
+---
+
+## 3. Quick Start (Recommended Order)
+
+> The focus below is on:
+> **what each step generates (outputs)**, **how to run it**, **common parameters**, and **where default parameters are defined**.
+
+---
+
+### 3.1 Generate SAM Masks
+
+```bash
+python get_sam_mask.py --scene <scene_name> --gml --clip --visualize
+```
+
+#### Outputs
+
+* `dataset/<scene_name>/raw_sam_mask/`
+* `dataset/<scene_name>/raw_sam_mask_vis/` (when `--visualize` is enabled)
+
+#### Common parameters
+
+* `--scene`: scene name
+* `--gml`: use `gml_mask` for filtering
+* `--clip`: enable CLIP-assisted classification
+* `--visualize`: output visualization results
+
+#### Default parameter location
+
+* `mask/config.json` (SAM / CLIP related)
+
+---
+
+### 3.2 Cross-View Mask Association (Unified Instance IDs)
+
+```bash
+python associate.py --scene <scene_name> --model <pretrained_model_name> --visualize --clip
+```
+
+#### Outputs
+
+* `dataset/<scene_name>/sam_mask/`
+* `dataset/<scene_name>/sam_mask_vis/` (when `--visualize` is enabled)
+
+#### Common parameters
+
+* `--scene`: scene name
+* `--model`: pretrained model name (under `model/`)
+* `--visualize`: output association visualization
+* `--clip`: enable CLIP-assisted matching
+
+#### Default parameter location
+
+* `mask/config.json` (projector related)
+* `arguments.py` (data/pipeline parameters)
+
+---
+
+### 3.3 Fuse Masks (SAM + CityGML) and Compute Object CLIP Features
+
+```bash
+python fuse_masks.py --scene <scene_name>
+```
+
+#### Outputs
+
+* `dataset/<scene_name>/fused_mask/`
+* `dataset/<scene_name>/fused_mask_vis/`
+* `dataset/<scene_name>/object_clip_index.npz`
+
+#### Common parameters
+
+* `--scene`: scene name
+
+#### Default parameter location
+
+* `argparse` inside `fuse_masks.py`
+
+---
+
+### 3.4 Semantic Training
+
+```bash
+python train.py \
+  --scene <scene_name> \
+  --model <pretrained_model_name> \
+  --output <output_name> \
+  --resolution 8 \
+  --iterations 10000
+```
+
+#### Outputs
+
+* `output/<output_name>/`
+
+  * `cfg_args`
+  * `point_cloud/iteration_xxx/classifier.pth`
+  * checkpoint (optional)
+  * copied scene semantic files (if present in source data)
+
+> The training script prioritizes `fused_mask/`; if it does not exist, it falls back to `sam_mask/`.
+
+#### Common parameters
+
+* `--scene`: scene name
+* `--model`: pretrained 3DGS model name (under `model/`)
+* `--output`: training output directory name (under `output/`)
+* `--resolution`: training resolution level
+* `--iterations`: number of training iterations
+
+#### Default parameter location
+
+* `config/train.json`
+* `arguments.py` (`ModelParams / OptimizationParams / PipelineParams`)
+
+---
+
+### 3.5 Rendering Export (Images / Video)
+
+```bash
+python render.py --output_name <output_name> --render_video
+```
+
+#### Outputs
+
+* `output/<output_name>/train/ours_<iter>/...`
+* `output/<output_name>/test/ours_<iter>/...`
+* `output/<output_name>/video/ours_<iter>/final_video.mp4` (when `--render_video` is enabled)
+
+#### Common parameters
+
+* `--output_name`: training output directory name (under `output/`)
+* `--render_video`: export video results
+
+#### Default parameter location
+
+* `RenderParams` in `arguments.py`
+* `output/<output_name>/cfg_args`
+
+---
+
+### 3.6 GUI Visualization (Important: Additional Input Files)
+
+```bash
+python main_gui.py \
+  -s dataset/<scene_name> \
+  --model_path output/<output_name> \
+  --iteration 10000 \
+  --gui_width 1024 \
+  --gui_height 768
+```
+
+#### GUI inputs (must be checked)
+
+* Scene directory: `dataset/<scene_name>`
+* Training output directory: `output/<output_name>`
+
+#### Files that must be copied into `output/<output_name>/` before visualization (very important)
+
+Please copy the following files into `output/<output_name>/` (or the actual model directory path read by the script):
+
+* `city_semantics.json` (from **Preprocessing 3: CityGML**)
+* `id_mapping.json` (from **Preprocessing 3: CityGML**)
+* `object_clip_index.npz` (from **Step 3.3**)
+
+#### Outputs
+
+* Interactive GUI window (usually no fixed files are generated unless the GUI has its own export functionality)
+
+#### Common parameters
+
+* `-s`: scene path (e.g., `dataset/<scene_name>`)
+* `--model_path`: training output directory path (e.g., `output/<output_name>`)
+* `--iteration`: iteration number to load
+* `--gui_width`: GUI window width
+* `--gui_height`: GUI window height
+
+#### Default parameter location
+
+* `argparse` inside `main_gui.py`
+* `arguments.py` (`ModelParams / PipelineParams`)
+
+---
+
+## 4. Configuration File Locations (Overview)
+
+* `mask/config.json`: preprocessing-stage defaults (SAM / CLIP / projector)
+* `config/train.json`: extra training-stage parameters (especially 3D regularization)
+* `arguments.py`: common defaults (data, training, rendering, pipeline)
+
+---
+
+## 5. Full Pipeline (Short Version)
+
+```text
+Preprocessing:
+1) SfM (generate sparse/0/*.bin)
+2) Original Gaussian-Splatting training for 3DGS (place model in model/)
+3) CityGML generates gml_mask / gml_mask_vis / city_semantics.json / id_mapping.json
+
+Project pipeline:
+4) get_sam_mask.py   -> raw_sam_mask / raw_sam_mask_vis
+5) associate.py      -> sam_mask / sam_mask_vis
+6) fuse_masks.py     -> fused_mask / fused_mask_vis / object_clip_index.npz
+7) train.py          -> output/<output_name>
+8) render.py         -> export images/video
+9) Copy city_semantics.json + id_mapping.json + object_clip_index.npz into the output path
+10) main_gui.py      -> interactive visualization
+```
 
 ```
-@misc{lyu2024gaga,
-      title={Gaga: Group Any Gaussians via 3D-aware Memory Bank}, 
-      author={Weijie Lyu and Xueting Li and Abhijit Kundu and Yi-Hsuan Tsai and Ming-Hsuan Yang},
-      year={2024},
-      eprint={2404.07977},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV}
-}
-```
+
+---

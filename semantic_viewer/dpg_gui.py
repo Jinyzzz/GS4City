@@ -200,11 +200,20 @@ class SemanticGaussianGUI:
 
         if 0 <= idx < len(self.train_cameras):
             self.active_train_cam_idx = idx
-            self.use_train_cam = True
-            print(f"[GUI] Switched to train camera #{idx}: {display_name}")
+
+            self.snap_orbit_to_train_cam(idx)
+
+            self.use_train_cam = False
+
+            try:
+                cam_now = self.construct_camera()
+                self.fetch_and_render(cam_now)
+            except Exception as e:
+                print(f"[GUI] immediate refresh failed: {e}")
+
+            print(f"[GUI] Selected & snapped to train camera #{idx}: {display_name}")
         else:
             print(f"[GUI] Train camera index out of range: {idx}")
-
     def set_mask_level(self, level: int):
         # Pass the value to HierarchyManager; it computes the highlight set
         self.hierarchy.set_mask_level(level)
@@ -425,11 +434,6 @@ class SemanticGaussianGUI:
                     tag="_train_cam_combo",
                 )
 
-                dpg.add_checkbox(
-                    label="Use Train Camera",
-                    default_value=self.use_train_cam,
-                    callback=lambda s, a: self.set_use_train_cam(a),
-                )
             else:
                 dpg.add_text("No train cameras found.", color=(200, 200, 200))
 
@@ -469,10 +473,6 @@ class SemanticGaussianGUI:
                 min_value=0.0,
                 max_value=1.0,
                 width=RIGHT_PANEL_WIDTH - 60,
-            )
-            dpg.add_button(
-                label="Run Query & Highlight",
-                callback=lambda: self.run_text_query(),
             )
 
         # Remove padding
@@ -593,6 +593,63 @@ class SemanticGaussianGUI:
 
         dpg.setup_dearpygui()
         dpg.show_viewport()
+
+    def snap_orbit_to_train_cam(self, idx: int):
+        if not (0 <= idx < len(self.train_cameras)):
+            print(f"[GUI] snap_orbit_to_train_cam: invalid idx={idx}")
+            return
+
+        cam = self.train_cameras[idx]
+
+        try:
+            import numpy as np
+            from scipy.spatial.transform import Rotation as SciRot
+
+            R_raw = np.asarray(cam.R, dtype=np.float32)
+            T_raw = np.asarray(cam.T, dtype=np.float32).reshape(3)
+
+            print("[GUI] ===== snap_orbit_to_train_cam (exact inverse) =====")
+            print(f"[GUI] cam idx = {idx}")
+            print(f"[GUI] cam.R shape = {R_raw.shape}")
+            print(f"[GUI] cam.T = {T_raw}")
+            print(f"[GUI] current orbit center = {self.camera.center}, radius = {self.camera.radius}")
+
+            R_c2w = R_raw
+            t_c2w = T_raw
+
+            r = float(max(self.camera.radius, 0.05))
+
+            center = R_c2w @ (t_c2w - np.array([0.0, 0.0, r], dtype=np.float32))
+
+            self.camera.rot = SciRot.from_matrix(R_c2w)
+            self.camera.radius = r
+            self.camera.center = center.astype(np.float32)
+
+            if hasattr(cam, "FoVy") and cam.FoVy is not None:
+                try:
+                    self.camera.fovy = float(np.degrees(float(cam.FoVy)))
+                except Exception:
+                    pass
+
+            try:
+                test_pose = self.camera.pose  # c2w
+                test_R = np.asarray(test_pose[:3, :3], dtype=np.float32)
+                test_t = np.asarray(test_pose[:3, 3], dtype=np.float32)
+
+                err_R = float(np.linalg.norm(test_R - R_c2w))
+                err_t = float(np.linalg.norm(test_t - t_c2w))
+                print(f"[GUI] verify |R-R_train|={err_R:.6f}, |t-t_train|={err_t:.6f}")
+            except Exception as ve:
+                print(f"[GUI] verify failed: {ve}")
+
+            print(f"[GUI] set orbit.center = {self.camera.center}")
+            print(f"[GUI] set orbit.radius = {self.camera.radius}")
+            print(f"[GUI] set orbit.fovy = {self.camera.fovy}")
+            print("[GUI] snap_orbit_to_train_cam done (c2w exact inverse)")
+            print("[GUI] ================================================")
+
+        except Exception as e:
+            print(f"[GUI] snap_orbit_to_train_cam failed: {e}")
 
     # ---------- Camera construction ----------
     def construct_camera(self) -> Camera:
