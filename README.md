@@ -1,21 +1,21 @@
-
 # CityGMLGaussian
 
 **Author:** Jinyu Zhu
 
 > **Developed based on the following projects**
-> - [Gaga](https://github.com/weijielyu/Gaga)
-> - [Gaussian Grouping](https://github.com/lkeab/gaussian-grouping)
-> - [Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting)
+>
+> * [Gaga](https://github.com/weijielyu/Gaga)
+> * [Gaussian Grouping](https://github.com/lkeab/gaussian-grouping)
+> * [Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting)
 
 A semantic processing pipeline based on **CityGML + multi-view images + Gaussian**, including:
 
-- **SAM mask generation**
-- **Cross-view mask association** (unified instance IDs)
-- **Mask fusion** (SAM + CityGML)
-- **Semantic training**
-- **Rendering result export**
-- **GUI visualization**
+* **SAM mask generation**
+* **Cross-view mask association** (unified instance IDs)
+* **Mask fusion** (SAM + CityGML)
+* **Semantic training**
+* **Rendering result export**
+* **GUI visualization**
 
 ---
 
@@ -27,10 +27,10 @@ Before running this project, complete the following **3 preprocessing steps**.
 
 Use an SfM tool (e.g., **COLMAP**) to reconstruct a sparse scene from multi-view images, and obtain:
 
-- `sparse/0/cameras.bin`
-- `sparse/0/frames.bin`
-- `sparse/0/images.bin`
-- `sparse/0/points3D.bin`
+* `sparse/0/cameras.bin`
+* `sparse/0/frames.bin`
+* `sparse/0/images.bin`
+* `sparse/0/points3D.bin`
 
 ---
 
@@ -38,7 +38,7 @@ Use an SfM tool (e.g., **COLMAP**) to reconstruct a sparse scene from multi-view
 
 Use the **original Gaussian-Splatting code** to train a 3DGS scene, and place the trained model in:
 
-- `model/<pretrained_model_name>/`
+* `model/<pretrained_model_name>/`
 
 ---
 
@@ -46,10 +46,10 @@ Use the **original Gaussian-Splatting code** to train a 3DGS scene, and place th
 
 Generate (or export) the following files from CityGML data:
 
-- `gml_mask/` (per-view `.npy` masks)
-- `gml_mask_vis/` (corresponding visualization images)
-- `city_semantics.json`
-- `id_mapping.json`
+* `gml_mask/` (per-view `.npy` masks)
+* `gml_mask_vis/` (corresponding visualization images)
+* `city_semantics.json`
+* `id_mapping.json`
 
 ---
 
@@ -76,7 +76,7 @@ your_project/
 ├─ weight/                   # SAM pretrained weights
 ├─ output/                   # Empty output directory (training/rendering results will be written here)
 └─ ...
-````
+```
 
 ### Requirements
 
@@ -223,7 +223,7 @@ python render.py --output_name <output_name> --render_video
 
 ---
 
-### 3.6 GUI Visualization (Important: Additional Input Files)
+## 4. GUI Visualization (Important: Additional Input Files)
 
 ```bash
 python main_gui.py \
@@ -234,12 +234,12 @@ python main_gui.py \
   --gui_height 768
 ```
 
-#### GUI inputs (must be checked)
+### GUI inputs (must be checked)
 
 * Scene directory: `dataset/<scene_name>`
 * Training output directory: `output/<output_name>`
 
-#### Files that must be copied into `output/<output_name>/` before visualization (very important)
+### Files that must be copied into `output/<output_name>/` before visualization (very important)
 
 Please copy the following files into `output/<output_name>/` (or the actual model directory path read by the script):
 
@@ -247,11 +247,11 @@ Please copy the following files into `output/<output_name>/` (or the actual mode
 * `id_mapping.json` (from **Preprocessing 3: CityGML**)
 * `object_clip_index.npz` (from **Step 3.3**)
 
-#### Outputs
+### Outputs
 
 * Interactive GUI window (usually no fixed files are generated unless the GUI has its own export functionality)
 
-#### Common parameters
+### Common parameters
 
 * `-s`: scene path (e.g., `dataset/<scene_name>`)
 * `--model_path`: training output directory path (e.g., `output/<output_name>`)
@@ -259,14 +259,14 @@ Please copy the following files into `output/<output_name>/` (or the actual mode
 * `--gui_width`: GUI window width
 * `--gui_height`: GUI window height
 
-#### Default parameter location
+### Default parameter location
 
 * `argparse` inside `main_gui.py`
 * `arguments.py` (`ModelParams / PipelineParams`)
 
 ---
 
-## 4. Configuration File Locations (Overview)
+## 5. Configuration File Locations (Overview)
 
 * `mask/config.json`: preprocessing-stage defaults (SAM / CLIP / projector)
 * `config/train.json`: extra training-stage parameters (especially 3D regularization)
@@ -274,7 +274,7 @@ Please copy the following files into `output/<output_name>/` (or the actual mode
 
 ---
 
-## 5. Full Pipeline (Short Version)
+## 6. Full Pipeline (Short Version)
 
 ```text
 Preprocessing:
@@ -290,8 +290,6 @@ Project pipeline:
 8) render.py         -> export images/video
 9) Copy city_semantics.json + id_mapping.json + object_clip_index.npz into the output path
 10) main_gui.py      -> interactive visualization
-```
-
 ```
 
 ---
