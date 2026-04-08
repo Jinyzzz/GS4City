@@ -2,62 +2,70 @@
 
 **Author:** Jinyu Zhu
 
-> **Developed based on the following projects**
->
-> * [Gaga](https://github.com/weijielyu/Gaga)
-> * [Gaussian Grouping](https://github.com/lkeab/gaussian-grouping)
-> * [Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting)
+## Overview
 
-A semantic processing pipeline based on **CityGML + multi-view images + Gaussian**, including:
+**GS4City** is a semantic processing pipeline that integrates **CityGML**, **multi-view imagery**, and **3D Gaussian Splatting (3DGS)** to enable high-quality semantic reconstruction and visualization of urban scenes.
 
-* **SAM mask generation**
-* **Cross-view mask association** (unified instance IDs)
-* **Mask fusion** (SAM + CityGML)
-* **Semantic training**
-* **Rendering result export**
-* **GUI visualization**
+The pipeline includes:
 
----
+* SAM-based mask generation
+* Cross-view instance association
+* Multi-source mask fusion (SAM + CityGML)
+* Semantic-aware Gaussian training
+* Rendering and export of results
+* Interactive GUI visualization
 
-## 1. Preprocessing (Before You Start)
+This project builds upon the following prior works:
 
-Before running this project, complete the following **3 preprocessing steps**.
-
-### Preprocessing 1: SfM (Reconstruct a Sparse Scene from Images)
-
-Use an SfM tool (e.g., **COLMAP**) to reconstruct a sparse scene from multi-view images, and obtain:
-
-* `sparse/0/cameras.bin`
-* `sparse/0/frames.bin`
-* `sparse/0/images.bin`
-* `sparse/0/points3D.bin`
+* Gaga
+* Gaussian Grouping
+* Gaussian Splatting
 
 ---
 
-### Preprocessing 2: Train a 3DGS Scene with the Original Gaussian-Splatting Code
+## 1. Preprocessing
 
-Use the **original Gaussian-Splatting code** to train a 3DGS scene, and place the trained model in:
+Before running the pipeline, complete the following three preprocessing steps.
 
-* `model/<pretrained_model_name>/`
+### 1.1 Structure-from-Motion (SfM)
+
+Use an SfM tool (e.g., COLMAP) to reconstruct a sparse scene from multi-view images. The following files must be generated:
+
+```
+sparse/0/cameras.bin
+sparse/0/frames.bin
+sparse/0/images.bin
+sparse/0/points3D.bin
+```
 
 ---
 
-### Preprocessing 3: Obtain Masks and Semantic Files from CityGML
+### 1.2 3D Gaussian Splatting Pretraining
 
-Generate (or export) the following files from CityGML data:
+Train a 3DGS model using the original Gaussian Splatting implementation. Place the trained model under:
+
+```
+model/<pretrained_model_name>/
+```
+
+---
+
+### 1.3 CityGML Semantic Data Preparation
+
+From CityGML data, generate or export:
 
 * `gml_mask/` (per-view `.npy` masks)
-* `gml_mask_vis/` (corresponding visualization images)
+* `gml_mask_vis/` (visualization images)
 * `city_semantics.json`
 * `id_mapping.json`
 
 ---
 
-## 2. Project Directory Setup (Before Running This Project)
+## 2. Project Directory Structure
 
-The project root is recommended to look like this (including the `dataset/<scene_name>/` structure):
+The project directory should follow this structure:
 
-```text
+```
 your_project/
 ├─ dataset/
 │  └─ <scene_name>/
@@ -72,93 +80,87 @@ your_project/
 │     │     └─ points3D.bin
 │     ├─ city_semantics.json
 │     └─ id_mapping.json
-├─ model/                    # Pretrained 3DGS models
-├─ weight/                   # SAM pretrained weights
-├─ output/                   # Empty output directory (training/rendering results will be written here)
-└─ ...
+├─ model/
+├─ weight/
+├─ output/
 ```
 
 ### Requirements
 
-* Filenames in `images/`, `gml_mask/`, and `gml_mask_vis/` must correspond **one-to-one** (same basename, different extensions).
+* Files in `images/`, `gml_mask/`, and `gml_mask_vis/` must correspond one-to-one (same filename, different extensions).
 
 ---
 
-## 3. Quick Start (Recommended Order)
+## 3. Pipeline Execution
 
-> The focus below is on:
-> **what each step generates (outputs)**, **how to run it**, **common parameters**, and **where default parameters are defined**.
-
----
-
-### 3.1 Generate SAM Masks
+### 3.1 SAM Mask Generation
 
 ```bash
 python get_sam_mask.py --scene <scene_name> --gml --clip --visualize
 ```
 
-#### Outputs
+**Outputs:**
 
 * `dataset/<scene_name>/raw_sam_mask/`
-* `dataset/<scene_name>/raw_sam_mask_vis/` (when `--visualize` is enabled)
+* `dataset/<scene_name>/raw_sam_mask_vis/` (if visualization enabled)
 
-#### Common parameters
+**Key Parameters:**
 
-* `--scene`: scene name
-* `--gml`: use `gml_mask` for filtering
+* `--scene`: scene identifier
+* `--gml`: enable filtering using CityGML masks
 * `--clip`: enable CLIP-assisted classification
-* `--visualize`: output visualization results
+* `--visualize`: save visualization results
 
-#### Default parameter location
+**Default Configuration:**
 
-* `mask/config.json` (SAM / CLIP related)
+* `mask/config.json`
 
 ---
 
-### 3.2 Cross-View Mask Association (Unified Instance IDs)
+### 3.2 Cross-View Mask Association
 
 ```bash
 python associate.py --scene <scene_name> --model <pretrained_model_name> --visualize --clip
 ```
 
-#### Outputs
+**Outputs:**
 
 * `dataset/<scene_name>/sam_mask/`
-* `dataset/<scene_name>/sam_mask_vis/` (when `--visualize` is enabled)
+* `dataset/<scene_name>/sam_mask_vis/`
 
-#### Common parameters
+**Key Parameters:**
 
-* `--scene`: scene name
-* `--model`: pretrained model name (under `model/`)
-* `--visualize`: output association visualization
-* `--clip`: enable CLIP-assisted matching
+* `--scene`: scene identifier
+* `--model`: pretrained 3DGS model name
+* `--visualize`: enable visualization
+* `--clip`: enable CLIP-based matching
 
-#### Default parameter location
+**Default Configuration:**
 
-* `mask/config.json` (projector related)
-* `arguments.py` (data/pipeline parameters)
+* `mask/config.json`
+* `arguments.py`
 
 ---
 
-### 3.3 Fuse Masks (SAM + CityGML) and Compute Object CLIP Features
+### 3.3 Mask Fusion and CLIP Feature Extraction
 
 ```bash
 python fuse_masks.py --scene <scene_name>
 ```
 
-#### Outputs
+**Outputs:**
 
 * `dataset/<scene_name>/fused_mask/`
 * `dataset/<scene_name>/fused_mask_vis/`
 * `dataset/<scene_name>/object_clip_index.npz`
 
-#### Common parameters
+**Key Parameters:**
 
-* `--scene`: scene name
+* `--scene`: scene identifier
 
-#### Default parameter location
+**Default Configuration:**
 
-* `argparse` inside `fuse_masks.py`
+* Defined within `fuse_masks.py`
 
 ---
 
@@ -173,57 +175,63 @@ python train.py \
   --iterations 10000
 ```
 
-#### Outputs
+**Outputs:**
 
 * `output/<output_name>/`
 
   * `cfg_args`
   * `point_cloud/iteration_xxx/classifier.pth`
-  * checkpoint (optional)
-  * copied scene semantic files (if present in source data)
+  * checkpoints (optional)
+  * copied semantic files (if available)
 
-> The training script prioritizes `fused_mask/`; if it does not exist, it falls back to `sam_mask/`.
+**Notes:**
 
-#### Common parameters
+* The training pipeline prioritizes `fused_mask/`; if unavailable, it falls back to `sam_mask/`.
 
-* `--scene`: scene name
-* `--model`: pretrained 3DGS model name (under `model/`)
-* `--output`: training output directory name (under `output/`)
+**Key Parameters:**
+
+* `--scene`: scene identifier
+* `--model`: pretrained model
+* `--output`: output directory name
 * `--resolution`: training resolution level
-* `--iterations`: number of training iterations
+* `--iterations`: number of iterations
 
-#### Default parameter location
+**Default Configuration:**
 
 * `config/train.json`
-* `arguments.py` (`ModelParams / OptimizationParams / PipelineParams`)
+* `arguments.py`
 
 ---
 
-### 3.5 Rendering Export (Images / Video)
+### 3.5 Rendering and Export
 
 ```bash
 python render.py --output_name <output_name> --render_video
 ```
 
-#### Outputs
+**Outputs:**
 
-* `output/<output_name>/train/ours_<iter>/...`
-* `output/<output_name>/test/ours_<iter>/...`
-* `output/<output_name>/video/ours_<iter>/final_video.mp4` (when `--render_video` is enabled)
+* Rendered images:
 
-#### Common parameters
+  * `output/<output_name>/train/ours_<iter>/`
+  * `output/<output_name>/test/ours_<iter>/`
+* Video (optional):
 
-* `--output_name`: training output directory name (under `output/`)
-* `--render_video`: export video results
+  * `output/<output_name>/video/ours_<iter>/final_video.mp4`
 
-#### Default parameter location
+**Key Parameters:**
 
-* `RenderParams` in `arguments.py`
-* `output/<output_name>/cfg_args`
+* `--output_name`: training output directory
+* `--render_video`: enable video export
+
+**Default Configuration:**
+
+* `arguments.py`
+* `cfg_args` in output directory
 
 ---
 
-## 4. GUI Visualization (Important: Additional Input Files)
+## 4. GUI Visualization
 
 ```bash
 python main_gui.py \
@@ -234,62 +242,37 @@ python main_gui.py \
   --gui_height 768
 ```
 
-### GUI inputs (must be checked)
+### Required Inputs
 
-* Scene directory: `dataset/<scene_name>`
-* Training output directory: `output/<output_name>`
+* Scene directory:
+  `dataset/<scene_name>`
 
-### Files that must be copied into `output/<output_name>/` before visualization (very important)
+* Model output directory:
+  `output/<output_name>`
 
-Please copy the following files into `output/<output_name>/` (or the actual model directory path read by the script):
+### Required Files (must be copied into output directory)
 
-* `city_semantics.json` (from **Preprocessing 3: CityGML**)
-* `id_mapping.json` (from **Preprocessing 3: CityGML**)
-* `object_clip_index.npz` (from **Step 3.3**)
+* `city_semantics.json`
+* `id_mapping.json`
+* `object_clip_index.npz`
 
-### Outputs
+### Parameters
 
-* Interactive GUI window (usually no fixed files are generated unless the GUI has its own export functionality)
+* `-s`: scene path
+* `--model_path`: model output path
+* `--iteration`: checkpoint iteration
+* `--gui_width`, `--gui_height`: window size
 
-### Common parameters
+### Output
 
-* `-s`: scene path (e.g., `dataset/<scene_name>`)
-* `--model_path`: training output directory path (e.g., `output/<output_name>`)
-* `--iteration`: iteration number to load
-* `--gui_width`: GUI window width
-* `--gui_height`: GUI window height
-
-### Default parameter location
-
-* `argparse` inside `main_gui.py`
-* `arguments.py` (`ModelParams / PipelineParams`)
+* Interactive visualization interface (no mandatory file output unless explicitly exported)
 
 ---
 
-## 5. Configuration File Locations (Overview)
+## 5. Configuration Files
 
-* `mask/config.json`: preprocessing-stage defaults (SAM / CLIP / projector)
-* `config/train.json`: extra training-stage parameters (especially 3D regularization)
-* `arguments.py`: common defaults (data, training, rendering, pipeline)
-
----
-
-## 6. Full Pipeline (Short Version)
-
-```text
-Preprocessing:
-1) SfM (generate sparse/0/*.bin)
-2) Original Gaussian-Splatting training for 3DGS (place model in model/)
-3) CityGML generates gml_mask / gml_mask_vis / city_semantics.json / id_mapping.json
-
-Project pipeline:
-4) get_sam_mask.py   -> raw_sam_mask / raw_sam_mask_vis
-5) associate.py      -> sam_mask / sam_mask_vis
-6) fuse_masks.py     -> fused_mask / fused_mask_vis / object_clip_index.npz
-7) train.py          -> output/<output_name>
-8) render.py         -> export images/video
-9) Copy city_semantics.json + id_mapping.json + object_clip_index.npz into the output path
-10) main_gui.py      -> interactive visualization
-```
+* `mask/config.json`: preprocessing parameters (SAM, CLIP, projection)
+* `config/train.json`: training-specific parameters (e.g., regularization)
+* `arguments.py`: shared configuration (data, model, rendering, pipeline)
 
 ---
