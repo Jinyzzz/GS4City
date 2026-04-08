@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2026, CityGMLGaussian
+# Copyright (C) 2026, GS4City
 # All rights reserved.
 #
 
@@ -108,7 +108,7 @@ class CLIPInstanceIndex:
         object_clip_index_path: str,
         device: Optional[torch.device] = None,
         model_name: str = "ViT-B-16",
-        pretrained: str = "openai",
+        pretrained: str = "laion2b_s34b_b88k",
     ):
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -227,7 +227,7 @@ class InstanceQueryEngine:
         object_clip_index_path: str,
         device: Optional[torch.device] = None,
         model_name: str = "ViT-B-16",
-        pretrained: str = "openai",
+        pretrained: str = "laion2b_s34b_b88k",
     ):
         self.city_index = CityGMLSemanticIndex(id_mapping_path, city_semantics_path)
         self.clip_index = CLIPInstanceIndex(

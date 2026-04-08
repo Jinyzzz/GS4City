@@ -41,7 +41,7 @@
 
   "sam": {
     "sam_encoder_version": "vit_h",
-    "sam_checkpoint_path": "/workspace/CityGMLGaussian/weight/sam_vit_h_4b8939.pth",
+    "sam_checkpoint_path": "/workspace/GS4City/weight/sam_vit_h_4b8939.pth",
     "sam_num_points_per_side": 32,
     "sam_num_points_per_batch": 32,
     "sam_pred_iou_threshold": 0.7,
@@ -55,7 +55,7 @@
     "iou_threshold": 0.2,
     "num_patch": 8,
     "clip_sim_threshold": 0.7,
-    "min_views": 3,
+    "min_views": 5,
     "max_group_distance": 80.0
   }
 }

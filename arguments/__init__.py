@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2026, CityGMLGaussian
+# Copyright (C) 2026, GS4City
 # All rights reserved.
 #
 # ------------------------------------------------------------------------

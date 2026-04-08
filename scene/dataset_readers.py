@@ -191,7 +191,7 @@ def readColmapSceneInfo(path, images, eval, object_path,
 
     if train_split:
         assert eval, "Train split only makes sense when evaluating the model"
-        assert "lerf_mask" in path, "Train split only makes sense when using the LERF-mask dataset"
+        # assert "lerf_mask" in path, "Train split only makes sense when using the LERF-mask dataset"
     if eval:
         if train_split:
             train_dir = os.path.join(path, "images_train")

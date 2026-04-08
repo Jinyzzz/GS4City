@@ -1,20 +1,17 @@
 #
-# Copyright (C) 2026, CityGMLGaussian
+# Copyright (C) 2026, GS4City
 # All rights reserved.
 #
 
 import os
 from argparse import ArgumentParser
-from typing import Optional, Tuple, Dict
-from collections import defaultdict
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np
 from tqdm import tqdm
-from PIL import Image
 
-import torch
-import clip
+from extract_object_clip_features import compute_clip_index_from_fused_masks
 
 
 def id_to_color(idx: int) -> Tuple[int, int, int]:
@@ -71,84 +68,6 @@ def load_mask_auto(base_path_no_ext: str) -> Optional[np.ndarray]:
     return None
 
 
-def load_rgb_image(scene_folder: str, stem: str) -> Optional[np.ndarray]:
-    """
-    Load the corresponding RGB image from <scene>/images (returned as BGR in OpenCV format).
-    """
-    img_dir = os.path.join(scene_folder, "images")
-    exts = [".png", ".PNG", ".jpg", ".JPG", ".jpeg", ".JPEG", ".bmp", ".BMP"]
-    for ext in exts:
-        p = os.path.join(img_dir, stem + ext)
-        if os.path.exists(p):
-            img = cv2.imread(p, cv2.IMREAD_COLOR)
-            if img is not None:
-                return img
-    return None
-
-
-def get_instance_bbox_from_mask(mask_np: np.ndarray, instance_id: int) -> Optional[Tuple[int, int, int, int]]:
-    """
-    Compute bbox for a given instance id from a 2D integer mask.
-    Returns (y_min, y_max, x_min, x_max) or None if not present.
-    """
-    ys, xs = np.where(mask_np == instance_id)
-    if ys.size == 0 or xs.size == 0:
-        return None
-    return int(ys.min()), int(ys.max()), int(xs.min()), int(xs.max())
-
-
-def compute_clip_feature_for_instance(
-    clip_model,
-    clip_preprocess,
-    device: torch.device,
-    rgb_bgr: np.ndarray,
-    mask_int: np.ndarray,
-    instance_id: int,
-    bg_value: int = 127,
-    pad: int = 4,
-) -> Optional[torch.Tensor]:
-    """
-    Extract CLIP image embedding for a specific instance id from an RGB image and instance mask.
-    Uses bbox crop and fills non-instance pixels with a constant background value.
-    Returns a L2-normalized torch tensor on CPU with shape [D], or None.
-    """
-    if rgb_bgr is None or mask_int is None:
-        return None
-    if mask_int.ndim != 2:
-        raise ValueError(f"mask_int must be 2D, got shape {mask_int.shape}")
-
-    bbox = get_instance_bbox_from_mask(mask_int, instance_id)
-    if bbox is None:
-        return None
-
-    y1, y2, x1, x2 = bbox
-    H, W = mask_int.shape
-
-    y1 = max(0, y1 - pad)
-    x1 = max(0, x1 - pad)
-    y2 = min(H - 1, y2 + pad)
-    x2 = min(W - 1, x2 + pad)
-
-    rgb = cv2.cvtColor(rgb_bgr, cv2.COLOR_BGR2RGB)
-    crop = rgb[y1:y2 + 1, x1:x2 + 1, :].copy()
-    m_crop = (mask_int[y1:y2 + 1, x1:x2 + 1] == instance_id)
-
-    if crop.size == 0 or m_crop.size == 0 or (not m_crop.any()):
-        return None
-
-    bg = np.array([bg_value, bg_value, bg_value], dtype=crop.dtype)
-    crop[~m_crop] = bg
-
-    pil_img = Image.fromarray(crop)
-
-    with torch.no_grad():
-        inp = clip_preprocess(pil_img).unsqueeze(0).to(device)
-        feat = clip_model.encode_image(inp).squeeze(0)  # [D]
-        feat = feat / feat.norm(dim=-1, keepdim=True)
-
-    return feat.detach().cpu()
-
-
 def fuse_masks_for_scene(
     scene_folder: str,
     sam_id_offset: int = 10000,
@@ -181,7 +100,7 @@ def fuse_masks_for_scene(
         sam_path = os.path.join(sam_dir, name)
         sam = np.load(sam_path)
         if sam is None:
-            print(f"[WARN] cannot read SAM mask: {sam_path}, skip.")
+            print(f"[WARN] Cannot read SAM mask: {sam_path}, skip.")
             continue
 
         if sam.ndim == 3:
@@ -194,8 +113,8 @@ def fuse_masks_for_scene(
         gml_base = os.path.join(gml_dir, stem)
         gml = load_mask_auto(gml_base)
         if gml is None:
-            H_sam, W_sam = sam.shape[:2]
-            gml = np.zeros((H_sam, W_sam), dtype=np.int64)
+            h_sam, w_sam = sam.shape[:2]
+            gml = np.zeros((h_sam, w_sam), dtype=np.int64)
 
         if gml.ndim == 3:
             gml = gml[..., 0]
@@ -211,17 +130,26 @@ def fuse_masks_for_scene(
         target_size = (target_w, target_h)
 
         if (h_gml, w_gml) != (target_h, target_w):
-            gml = cv2.resize(gml.astype(np.int32), target_size, interpolation=cv2.INTER_NEAREST).astype(np.int64)
-        if (h_sam, w_sam) != (target_h, target_w):
-            sam = cv2.resize(sam.astype(np.int32), target_size, interpolation=cv2.INTER_NEAREST).astype(np.int64)
+            gml = cv2.resize(
+                gml.astype(np.int32),
+                target_size,
+                interpolation=cv2.INTER_NEAREST
+            ).astype(np.int64)
 
-        H, W = target_h, target_w
+        if (h_sam, w_sam) != (target_h, target_w):
+            sam = cv2.resize(
+                sam.astype(np.int32),
+                target_size,
+                interpolation=cv2.INTER_NEAREST
+            ).astype(np.int64)
+
+        h, w = target_h, target_w
 
         sam_nonzero = (sam != 0)
         if sam_nonzero.any():
             sam[sam_nonzero] = sam[sam_nonzero] + int(sam_id_offset)
 
-        fused = np.zeros((H, W), dtype=np.uint16)
+        fused = np.zeros((h, w), dtype=np.uint16)
         fused[sam != 0] = sam[sam != 0].astype(np.uint16)
         fused[(sam == 0) & (gml != 0)] = gml[(sam == 0) & (gml != 0)].astype(np.uint16)
 
@@ -229,140 +157,21 @@ def fuse_masks_for_scene(
         np.save(out_gray_path, fused)
 
         if write_vis:
-            vis = np.zeros((H, W, 3), dtype=np.uint8)
+            vis = np.zeros((h, w, 3), dtype=np.uint8)
             unique_ids = np.unique(fused)
             unique_ids = unique_ids[unique_ids != 0]
             for uid in unique_ids:
                 r, g, b = id_to_color(int(uid))
-                vis[fused == uid] = (b, g, r)  # BGR
+                vis[fused == uid] = (b, g, r)  # BGR for OpenCV
             out_vis_path = os.path.join(out_vis_dir, stem + ".png")
             cv2.imwrite(out_vis_path, vis)
 
     return out_gray_dir, out_vis_dir
 
 
-def compute_clip_index_from_fused_masks(
-    scene_folder: str,
-    fused_mask_dir: str,
-    output_npz_path: str,
-    model_name: str = "ViT-B/16",
-    device_str: Optional[str] = None,
-    min_pixels: int = 10,
-    skip_ids: Tuple[int, ...] = (0,),
-    bg_value: int = 127,
-) -> None:
-    """
-    Compute per-object CLIP features using fused masks across views, then save as .npz.
-    """
-    if device_str is None:
-        device_str = "cuda" if torch.cuda.is_available() else "cpu"
-    device = torch.device(device_str)
-
-    print(f"[INFO] Using device: {device}")
-    print(f"[INFO] Loading CLIP model: {model_name}")
-    clip_model, clip_preprocess = clip.load(model_name, device=device)
-    clip_model.eval()
-
-    fused_files = sorted(f for f in os.listdir(fused_mask_dir) if f.lower().endswith(".npy"))
-    if not fused_files:
-        raise RuntimeError(f"No fused mask .npy files found in {fused_mask_dir}")
-
-    id_to_feat_sum: Dict[int, torch.Tensor] = {}
-    id_to_count = defaultdict(int)
-
-    for fname in tqdm(fused_files, desc="Computing CLIP features"):
-        stem, _ = os.path.splitext(fname)
-        mask_path = os.path.join(fused_mask_dir, fname)
-
-        fused = np.load(mask_path)
-        if fused is None:
-            continue
-        if fused.ndim == 3:
-            fused = fused[..., 0]
-        if not np.issubdtype(fused.dtype, np.integer):
-            fused = fused.astype(np.int64)
-        else:
-            fused = fused.astype(np.int64)
-
-        rgb_bgr = load_rgb_image(scene_folder, stem)
-        if rgb_bgr is None:
-            print(f"[WARN] Missing RGB image for {stem}, skipping feature extraction for this view.")
-            continue
-
-        rgb_h, rgb_w = rgb_bgr.shape[:2]
-        if fused.shape[0] != rgb_h or fused.shape[1] != rgb_w:
-            fused = cv2.resize(fused.astype(np.int32), (rgb_w, rgb_h), interpolation=cv2.INTER_NEAREST).astype(np.int64)
-
-        unique_ids = np.unique(fused)
-        unique_ids = unique_ids[unique_ids != 0]
-
-        for inst_id in unique_ids.tolist():
-            inst_id_int = int(inst_id)
-            if inst_id_int in skip_ids:
-                continue
-
-            inst_mask = (fused == inst_id_int)
-            if int(inst_mask.sum()) < int(min_pixels):
-                continue
-
-            feat = compute_clip_feature_for_instance(
-                clip_model=clip_model,
-                clip_preprocess=clip_preprocess,
-                device=device,
-                rgb_bgr=rgb_bgr,
-                mask_int=fused,
-                instance_id=inst_id_int,
-                bg_value=bg_value,
-                pad=4,
-            )
-            if feat is None:
-                continue
-
-            if inst_id_int not in id_to_feat_sum:
-                id_to_feat_sum[inst_id_int] = feat.clone()
-            else:
-                id_to_feat_sum[inst_id_int] += feat
-            id_to_count[inst_id_int] += 1
-
-    all_ids = sorted(id_to_feat_sum.keys())
-    if not all_ids:
-        raise RuntimeError(
-            "No instance features were computed. Check images, masks, min_pixels, and skip_ids."
-        )
-
-    features = []
-    counts = []
-    for inst_id in all_ids:
-        sum_feat = id_to_feat_sum[inst_id]
-        cnt = int(id_to_count[inst_id])
-        avg_feat = sum_feat / float(max(cnt, 1))
-        avg_feat = avg_feat / (avg_feat.norm(dim=-1, keepdim=True) + 1e-12)
-        features.append(avg_feat.numpy().astype(np.float32))
-        counts.append(cnt)
-
-    ids_np = np.array(all_ids, dtype=np.int64)
-    feats_np = np.stack(features, axis=0).astype(np.float32)
-    counts_np = np.array(counts, dtype=np.int32)
-
-    out_dir = os.path.dirname(os.path.abspath(output_npz_path))
-    if out_dir:
-        os.makedirs(out_dir, exist_ok=True)
-
-    np.savez(
-        output_npz_path,
-        ids=ids_np,
-        features=feats_np,
-        counts=counts_np,
-        model_name=model_name,
-    )
-
-    print(f"[INFO] Saved {len(ids_np)} object features to {output_npz_path}")
-    print("[INFO] You can query by object id using this .npz file.")
-
-
 def main():
     parser = ArgumentParser(
-        description="Fuse (SAM + CityGML) masks and compute per-object CLIP features from fused masks."
+        description="Fuse (SAM + CityGML) masks and compute per-object OpenCLIP features from fused masks."
     )
     parser.add_argument(
         "--scene",
@@ -391,27 +200,33 @@ def main():
     parser.add_argument(
         "--clip-model",
         type=str,
-        default="ViT-B/16",
-        help="CLIP model name (e.g., 'ViT-B/16', 'ViT-B/32').",
+        default="ViT-B-16",
+        help="OpenCLIP model name, e.g. 'ViT-B-16'.",
+    )
+    parser.add_argument(
+        "--clip-pretrained",
+        type=str,
+        default="laion2b_s34b_b88k",
+        help="OpenCLIP pretrained checkpoint name.",
     )
     parser.add_argument(
         "--device",
         type=str,
         default=None,
-        help="Device string for PyTorch/CLIP (e.g., 'cuda' or 'cpu'). If None, auto-detect.",
+        help="Device string for PyTorch/OpenCLIP (e.g. 'cuda' or 'cpu'). If None, auto-detect.",
     )
     parser.add_argument(
         "--min-pixels",
         type=int,
         default=10,
-        help="Minimum number of pixels per instance to be considered for CLIP feature extraction.",
+        help="Minimum number of pixels per instance to be considered for feature extraction.",
     )
     parser.add_argument(
         "--skip-id",
         type=int,
         nargs="*",
         default=[0],
-        help="Instance ids to skip (e.g., background 0).",
+        help="Instance ids to skip (e.g. background 0).",
     )
     parser.add_argument(
         "--bg-value",
@@ -433,13 +248,13 @@ def main():
     scene_folder = os.path.join(dataset_root, args.scene)
 
     if not os.path.exists(scene_folder):
-        raise FileNotFoundError(f"scene folder not found: {scene_folder}")
+        raise FileNotFoundError(f"Scene folder not found: {scene_folder}")
 
     write_vis = (not args.no_vis)
 
-    print(f"[INFO] scene folder: {scene_folder}")
+    print(f"[INFO] Scene folder: {scene_folder}")
     print(f"[INFO] SAM id offset: {args.sam_id_offset}")
-    print(f"[INFO] write visualization: {write_vis}")
+    print(f"[INFO] Write visualization: {write_vis}")
 
     fused_mask_dir, _ = fuse_masks_for_scene(
         scene_folder=scene_folder,
@@ -457,6 +272,7 @@ def main():
         fused_mask_dir=fused_mask_dir,
         output_npz_path=output_npz_path,
         model_name=args.clip_model,
+        pretrained=args.clip_pretrained,
         device_str=args.device,
         min_pixels=int(args.min_pixels),
         skip_ids=tuple(int(x) for x in args.skip_id),

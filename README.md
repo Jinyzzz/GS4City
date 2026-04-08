@@ -1,4 +1,4 @@
-# CityGMLGaussian
+# GS4City
 
 **Author:** Jinyu Zhu
 

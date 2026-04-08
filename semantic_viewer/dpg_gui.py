@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2026, CityGMLGaussian
+# Copyright (C) 2026, GS4City
 # All rights reserved.
 #
 
@@ -284,6 +284,12 @@ class SemanticGaussianGUI:
 
         print(f"[GUI] Query '{desc}' via {route}: highlighted {len(selected_ids)} instances.")
 
+    def clear_query(self):
+        self.hierarchy.highlight_gray_ids = None
+        dpg.set_value("_query_description_input", "")
+        dpg.set_value("_selection_info_text", "No query result.")
+        print("[GUI] Query cleared.")
+
     # ---------- DearPyGUI registration ----------
     def register_dpg(self):
         RIGHT_PANEL_WIDTH = 400
@@ -465,6 +471,8 @@ class SemanticGaussianGUI:
                 label="Description",
                 tag="_query_description_input",
                 width=RIGHT_PANEL_WIDTH - 60,
+                on_enter=True,
+                callback=lambda: self.run_text_query(),
             )
             dpg.add_slider_float(
                 label="Similarity Threshold (CLIP)",
@@ -474,6 +482,18 @@ class SemanticGaussianGUI:
                 max_value=1.0,
                 width=RIGHT_PANEL_WIDTH - 60,
             )
+
+            with dpg.group(horizontal=True):
+                dpg.add_button(
+                    label="Search",
+                    callback=lambda: self.run_text_query(),
+                    width=100,
+                )
+                dpg.add_button(
+                    label="Clear Query",
+                    callback=lambda: self.clear_query(),
+                    width=100,
+                )
 
         # Remove padding
         with dpg.theme() as theme_no_padding:

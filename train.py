@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2026, CityGMLGaussian
+# Copyright (C) 2026, GS4City
 # All rights reserved.
 #
 # ------------------------------------------------------------------------
@@ -16,6 +16,9 @@ import sys
 import uuid
 import json
 import shutil
+import time
+import subprocess
+from pathlib import Path
 from random import randint
 from argparse import ArgumentParser, Namespace
 
@@ -35,6 +38,40 @@ except ImportError:
     TENSORBOARD_FOUND = False
 
 
+def _bytes_to_mb(x: int) -> float:
+    return float(x) / (1024.0 ** 2)
+
+def _dir_size_bytes(path: str) -> int:
+    p = Path(path)
+    if not p.exists():
+        return 0
+    if p.is_file():
+        return p.stat().st_size
+    total = 0
+    for f in p.rglob("*"):
+        if f.is_file():
+            try:
+                total += f.stat().st_size
+            except OSError:
+                pass
+    return total
+
+def _nvidia_smi_mem_used_mb(gpu_index: int = 0):
+    try:
+        out = subprocess.check_output(
+            [
+                "nvidia-smi",
+                f"--id={gpu_index}",
+                "--query-gpu=memory.used",
+                "--format=csv,noheader,nounits",
+            ],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        return float(out.splitlines()[0])
+    except Exception:
+        return None
+    
 def training(
     dataset,
     opt,
@@ -47,6 +84,12 @@ def training(
     use_wandb,
 ):
     first_iter = 0
+    train_wall_start = time.time()
+    train_perf_start = time.perf_counter()
+
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+        torch.cuda.empty_cache()
 
     tb_writer = prepare_output_and_logger(dataset)
 
@@ -347,6 +390,13 @@ def training(
                     scene.model_path + "/chkpnt" + str(iteration) + ".pth",
                 )
 
+    train_wall_end = time.time()
+    train_perf_end = time.perf_counter()
+    if tb_writer:
+        tb_writer.add_scalar("perf/train_wall_time_s", train_wall_end - train_wall_start, 0)
+        tb_writer.add_scalar("perf/train_perf_time_s", train_perf_end - train_perf_start, 0)
+        tb_writer.flush()
+    
     if tb_writer:
         tb_writer.close()
 
@@ -412,7 +462,7 @@ def training_report(
     loss_obj,
     loss,
     l1_loss,
-    elapsed,
+    elapsed,  # CUDA event elapsed_time: ms
     testing_iterations,
     scene: Scene,
     renderFunc,
@@ -420,34 +470,98 @@ def training_report(
     loss_obj_3d,
     use_wandb,
 ):
+    LOG_GPU_EVERY = 200
+    LOG_SMI_EVERY = 2000
+    LOG_STORAGE_EVERY = 5000
+
     if tb_writer:
         tb_writer.add_scalar("train_loss_patches/loss_obj_2d", loss_obj.item(), iteration)
         tb_writer.add_scalar("train_loss_patches/total_loss", loss.item(), iteration)
         if loss_obj_3d is not None:
             tb_writer.add_scalar("train_loss_patches/loss_obj_3d", loss_obj_3d.item(), iteration)
-        tb_writer.add_scalar("iter_time", elapsed, iteration)
+
+        # time (ms -> also log seconds)
+        tb_writer.add_scalar("perf/iter_time_ms", elapsed, iteration)
+        tb_writer.add_scalar("perf/iter_time_s", elapsed / 1000.0, iteration)
+
+        # GPU memory (PyTorch)
+        if (iteration % LOG_GPU_EVERY == 0) and torch.cuda.is_available():
+            tb_writer.add_scalar("gpu/memory_allocated_mb",
+                                 _bytes_to_mb(torch.cuda.memory_allocated()),
+                                 iteration)
+            tb_writer.add_scalar("gpu/memory_reserved_mb",
+                                 _bytes_to_mb(torch.cuda.memory_reserved()),
+                                 iteration)
+            tb_writer.add_scalar("gpu/peak_memory_allocated_mb",
+                                 _bytes_to_mb(torch.cuda.max_memory_allocated()),
+                                 iteration)
+            tb_writer.add_scalar("gpu/peak_memory_reserved_mb",
+                                 _bytes_to_mb(torch.cuda.max_memory_reserved()),
+                                 iteration)
+
+        # GPU memory (nvidia-smi, slow)
+        if iteration % LOG_SMI_EVERY == 0:
+            smi_used = _nvidia_smi_mem_used_mb(gpu_index=0)
+            if smi_used is not None:
+                tb_writer.add_scalar("gpu/nvidia_smi_memory_used_mb", smi_used, iteration)
+
+        # storage (slow)
+        if iteration % LOG_STORAGE_EVERY == 0:
+            model_path = getattr(scene, "model_path", None)
+            if model_path is not None:
+                tb_writer.add_scalar("storage/model_path_mb",
+                                     _bytes_to_mb(_dir_size_bytes(model_path)),
+                                     iteration)
+
+                pc_dir = os.path.join(model_path, "point_cloud")
+                tb_writer.add_scalar("storage/point_cloud_dir_mb",
+                                     _bytes_to_mb(_dir_size_bytes(pc_dir)),
+                                     iteration)
+
+                # semantic subdir (contains clip_semantics.npy etc.)
+                try:
+                    subdirs = [d for d in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, d))]
+                    if len(subdirs) > 0:
+                        sem_dir = os.path.join(model_path, subdirs[0])
+                        tb_writer.add_scalar("storage/semantic_dir_mb",
+                                             _bytes_to_mb(_dir_size_bytes(sem_dir)),
+                                             iteration)
+                except Exception:
+                    pass
+
+                # optional candidates
+                candidates = [
+                    os.path.join(model_path, "identity_features"),
+                    os.path.join(model_path, "feature_bank"),
+                    os.path.join(model_path, "features"),
+                ]
+                for c in candidates:
+                    tag = "storage/" + os.path.basename(c) + "_mb"
+                    tb_writer.add_scalar(tag, _bytes_to_mb(_dir_size_bytes(c)), iteration)
 
     if use_wandb:
+        log_dict = {
+            "train_loss_patches/total_loss": loss.item(),
+            "train_loss_patches/loss_obj": loss_obj.item(),
+            "perf/iter_time_ms": elapsed,
+            "perf/iter_time_s": elapsed / 1000.0,
+            "iter": iteration,
+        }
         if loss_obj_3d is not None:
-            wandb.log(
-                {
-                    "train_loss_patches/total_loss": loss.item(),
-                    "train_loss_patches/loss_obj": loss_obj.item(),
-                    "train_loss_patches/loss_obj_3d": loss_obj_3d.item(),
-                    "iter_time": elapsed,
-                    "iter": iteration,
-                }
-            )
-        else:
-            wandb.log(
-                {
-                    "train_loss_patches/total_loss": loss.item(),
-                    "train_loss_patches/loss_obj": loss_obj.item(),
-                    "iter_time": elapsed,
-                    "iter": iteration,
-                }
-            )
+            log_dict["train_loss_patches/loss_obj_3d"] = loss_obj_3d.item()
 
+        if (iteration % LOG_GPU_EVERY == 0) and torch.cuda.is_available():
+            log_dict["gpu/memory_allocated_mb"] = _bytes_to_mb(torch.cuda.memory_allocated())
+            log_dict["gpu/memory_reserved_mb"] = _bytes_to_mb(torch.cuda.memory_reserved())
+            log_dict["gpu/peak_memory_allocated_mb"] = _bytes_to_mb(torch.cuda.max_memory_allocated())
+            log_dict["gpu/peak_memory_reserved_mb"] = _bytes_to_mb(torch.cuda.max_memory_reserved())
+
+        if iteration % LOG_SMI_EVERY == 0:
+            smi_used = _nvidia_smi_mem_used_mb(gpu_index=0)
+            if smi_used is not None:
+                log_dict["gpu/nvidia_smi_memory_used_mb"] = smi_used
+
+        wandb.log(log_dict)
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="Training script parameters")
