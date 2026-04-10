@@ -8,9 +8,11 @@
 
 This project builds upon the following prior works:
 
-* Gaga
-* Gaussian Grouping
-* Gaussian Splatting
+* [Gaga](https://github.com/weijielyu/Gaga)
+* [Gaussian Grouping](https://github.com/lkeab/gaussian-grouping)
+* [Gaussian Splatting] (https://github.com/graphdeco-inria/gaussian-splatting)
+
+The experiments in this project are conducted on the [TUM2TWIN dataset](https://github.com/tum-gis/tum2twin).
 
 <img width="1096" src="media/evaluation.png" />
 
