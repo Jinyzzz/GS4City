@@ -2,9 +2,9 @@
 
 ## Introduction
 
-**GS4City** is a hierarchical semantic 3D Gaussian Splatting framework for urban scenes. It integrates **CityGML**, **multi-view imagery**, and **3DGS** to generate structured semantic masks, support semantic-aware Gaussian training, and enable visualization of semantically enriched urban reconstructions.
+**GS4City** is a hierarchical semantic Gaussian Splatting method that incorporates city model priors for urban scene understanding.
 
-<img width="600" src="media/intro.png" />
+<img width="1096" src="media/intro.png" />
 
 This project builds upon the following prior works:
 
@@ -12,7 +12,7 @@ This project builds upon the following prior works:
 * Gaussian Grouping
 * Gaussian Splatting
 
-<img width="600" src="media/evaluation.png" />
+<img width="1096" src="media/evaluation.png" />
 
 
 ## Preprocessing
@@ -81,7 +81,7 @@ your_project/
 
 ## Mask Preparation
 
-### SAM Mask Generation
+### 1.SAM Mask Generation
 
 ```bash
 python get_sam_mask.py --scene <scene_name> --gml --clip --visualize
@@ -104,7 +104,7 @@ python get_sam_mask.py --scene <scene_name> --gml --clip --visualize
 * `mask/config.json`
 
 
-### Cross-View Mask Association
+### 2.Cross-View Mask Association
 
 ```bash
 python associate.py --scene <scene_name> --model <pretrained_model_name> --visualize --clip
@@ -128,7 +128,7 @@ python associate.py --scene <scene_name> --model <pretrained_model_name> --visua
 * `arguments.py`
 
 
-### Mask Fusion and CLIP Feature Extraction
+### 3.Mask Fusion and CLIP Feature Extraction
 
 ```bash
 python fuse_masks.py --scene <scene_name>
@@ -171,7 +171,7 @@ python train.py \
 * The training pipeline prioritizes `fused_mask/`; if unavailable, it falls back to `sam_mask/`.
 
 
-### Rendering and Export
+### Rendering
 
 ```bash
 python render.py --output_name <output_name> --render_video
@@ -184,8 +184,11 @@ python render.py --output_name <output_name> --render_video
 
 
 
-
 ## GUI Visualization
+
+The GUI integrates **CityGML semantic knowledge** with **CLIP-based open-vocabulary features**, enabling interactive exploration and querying of the reconstructed 3D scene.
+
+<img width="1096" src="media/gui.png" />
 
 ```bash
 python main_gui.py \
@@ -195,10 +198,6 @@ python main_gui.py \
   --gui_width 1024 \
   --gui_height 768
 ```
-
-The GUI integrates **CityGML semantic knowledge** with **CLIP-based open-vocabulary features**, enabling interactive exploration and querying of the reconstructed 3D scene.
-
-<img width="1096" src="media/gui.png" />
 
 ### Required Inputs
 
@@ -214,11 +213,7 @@ The GUI integrates **CityGML semantic knowledge** with **CLIP-based open-vocabul
 
 ### View Mode Switching
 
-Switch between different visualization modes:
-
-* **RGB**: original rendered appearance
-* **Segmentation**: semantic or instance labels
-* **Overlay**: blended RGB and semantic visualization
+Switch between different visualization modes: RGB mode, Segmentation mode and Overlay mode.
 
 <img width="1096" src="media/modes.png" />
 
@@ -233,11 +228,7 @@ Interact with the scene using hierarchical semantics derived from CityGML:
 
 ### Semantic Attribute Retrieval
 
-Click on any object in the scene to retrieve its corresponding **CityGML semantic information**, including:
-
-* object type
-* attributes
-* hierarchical relations
+Click on any object in the scene to retrieve its corresponding **CityGML semantic information**.
 
 <img width="1096" src="media/semantic.png" />
 
@@ -247,8 +238,6 @@ Perform hybrid semantic queries combining:
 
 * **structured labels** (e.g., building components from CityGML)
 * **open-vocabulary queries** (via CLIP for non-building elements)
-
-This enables flexible search across both predefined semantics and free-form textual concepts.
 
 <img width="1096" src="media/search.png" />
 
