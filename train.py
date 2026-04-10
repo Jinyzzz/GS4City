@@ -648,7 +648,7 @@ if __name__ == "__main__":
     print("Saving new model to        " + output_dir)
 
     if args.use_wandb:
-        wandb.init(project="Gaga")
+        wandb.init(project="GS4City")
         wandb.config.args = args
         run_name = "_".join(output_dir.split("/")[1:])
         wandb.run.name = run_name

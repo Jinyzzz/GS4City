@@ -1,19 +1,10 @@
 # GS4City
 
-**Author:** Jinyu Zhu
+## Introduction
 
-## Overview
+**GS4City** is a hierarchical semantic 3D Gaussian Splatting framework for urban scenes. It integrates **CityGML**, **multi-view imagery**, and **3DGS** to generate structured semantic masks, support semantic-aware Gaussian training, and enable visualization of semantically enriched urban reconstructions.
 
-**GS4City** is a semantic processing pipeline that integrates **CityGML**, **multi-view imagery**, and **3D Gaussian Splatting (3DGS)** to enable high-quality semantic reconstruction and visualization of urban scenes.
-
-The pipeline includes:
-
-* SAM-based mask generation
-* Cross-view instance association
-* Multi-source mask fusion (SAM + CityGML)
-* Semantic-aware Gaussian training
-* Rendering and export of results
-* Interactive GUI visualization
+<img width="600" src="media/intro.png" />
 
 This project builds upon the following prior works:
 
@@ -21,51 +12,49 @@ This project builds upon the following prior works:
 * Gaussian Grouping
 * Gaussian Splatting
 
----
+<img width="600" src="media/evaluation.png" />
 
-## 1. Preprocessing
+
+## Preprocessing
 
 Before running the pipeline, complete the following three preprocessing steps.
 
-### 1.1 Structure-from-Motion (SfM)
+### Structure-from-Motion (SfM)
 
-Use an SfM tool (e.g., COLMAP) to reconstruct a sparse scene from multi-view images. The following files must be generated:
+Use an SfM tool to reconstruct a sparse scene from multi-view images. The following files must be generated:
 
-```
+```bash
 sparse/0/cameras.bin
 sparse/0/frames.bin
 sparse/0/images.bin
 sparse/0/points3D.bin
 ```
 
----
-
-### 1.2 3D Gaussian Splatting Pretraining
+### 3D Gaussian Splatting Pretraining
 
 Train a 3DGS model using the original Gaussian Splatting implementation. Place the trained model under:
 
-```
+```bash
 model/<pretrained_model_name>/
 ```
 
----
+### CityGML Semantic Data Preparation
 
-### 1.3 CityGML Semantic Data Preparation
+Prepare semantic data from CityGML using the preprocessing pipeline provided in [CityGML2Mask](https://github.com/Jinyzzz/CityGML2Mask)
 
-From CityGML data, generate or export:
+Place the result files under:
 
 * `gml_mask/` (per-view `.npy` masks)
 * `gml_mask_vis/` (visualization images)
 * `city_semantics.json`
 * `id_mapping.json`
 
----
 
-## 2. Project Directory Structure
+## Project Structure
 
 The project directory should follow this structure:
 
-```
+```bash
 your_project/
 ├─ dataset/
 │  └─ <scene_name>/
@@ -89,11 +78,10 @@ your_project/
 
 * Files in `images/`, `gml_mask/`, and `gml_mask_vis/` must correspond one-to-one (same filename, different extensions).
 
----
 
-## 3. Pipeline Execution
+## Mask Preparation
 
-### 3.1 SAM Mask Generation
+### SAM Mask Generation
 
 ```bash
 python get_sam_mask.py --scene <scene_name> --gml --clip --visualize
@@ -102,7 +90,7 @@ python get_sam_mask.py --scene <scene_name> --gml --clip --visualize
 **Outputs:**
 
 * `dataset/<scene_name>/raw_sam_mask/`
-* `dataset/<scene_name>/raw_sam_mask_vis/` (if visualization enabled)
+* `dataset/<scene_name>/raw_sam_mask_vis/`
 
 **Key Parameters:**
 
@@ -115,9 +103,8 @@ python get_sam_mask.py --scene <scene_name> --gml --clip --visualize
 
 * `mask/config.json`
 
----
 
-### 3.2 Cross-View Mask Association
+### Cross-View Mask Association
 
 ```bash
 python associate.py --scene <scene_name> --model <pretrained_model_name> --visualize --clip
@@ -140,9 +127,8 @@ python associate.py --scene <scene_name> --model <pretrained_model_name> --visua
 * `mask/config.json`
 * `arguments.py`
 
----
 
-### 3.3 Mask Fusion and CLIP Feature Extraction
+### Mask Fusion and CLIP Feature Extraction
 
 ```bash
 python fuse_masks.py --scene <scene_name>
@@ -158,13 +144,10 @@ python fuse_masks.py --scene <scene_name>
 
 * `--scene`: scene identifier
 
-**Default Configuration:**
 
-* Defined within `fuse_masks.py`
+## Semantic Training
 
----
-
-### 3.4 Semantic Training
+### Training
 
 ```bash
 python train.py \
@@ -182,28 +165,13 @@ python train.py \
   * `cfg_args`
   * `point_cloud/iteration_xxx/classifier.pth`
   * checkpoints (optional)
-  * copied semantic files (if available)
 
 **Notes:**
 
 * The training pipeline prioritizes `fused_mask/`; if unavailable, it falls back to `sam_mask/`.
 
-**Key Parameters:**
 
-* `--scene`: scene identifier
-* `--model`: pretrained model
-* `--output`: output directory name
-* `--resolution`: training resolution level
-* `--iterations`: number of iterations
-
-**Default Configuration:**
-
-* `config/train.json`
-* `arguments.py`
-
----
-
-### 3.5 Rendering and Export
+### Rendering and Export
 
 ```bash
 python render.py --output_name <output_name> --render_video
@@ -211,27 +179,13 @@ python render.py --output_name <output_name> --render_video
 
 **Outputs:**
 
-* Rendered images:
+* `output/<output_name>/train/ours_<iter>/`
+* `output/<output_name>/test/ours_<iter>/`
 
-  * `output/<output_name>/train/ours_<iter>/`
-  * `output/<output_name>/test/ours_<iter>/`
-* Video (optional):
 
-  * `output/<output_name>/video/ours_<iter>/final_video.mp4`
 
-**Key Parameters:**
 
-* `--output_name`: training output directory
-* `--render_video`: enable video export
-
-**Default Configuration:**
-
-* `arguments.py`
-* `cfg_args` in output directory
-
----
-
-## 4. GUI Visualization
+## GUI Visualization
 
 ```bash
 python main_gui.py \
@@ -242,37 +196,65 @@ python main_gui.py \
   --gui_height 768
 ```
 
+The GUI integrates **CityGML semantic knowledge** with **CLIP-based open-vocabulary features**, enabling interactive exploration and querying of the reconstructed 3D scene.
+
+<img width="1096" src="media/gui.png" />
+
 ### Required Inputs
 
-* Scene directory:
-  `dataset/<scene_name>`
+* `dataset/<scene_name>`
+* `output/<output_name>`
 
-* Model output directory:
-  `output/<output_name>`
-
-### Required Files (must be copied into output directory)
+### Required Files (copy into output directory)
 
 * `city_semantics.json`
 * `id_mapping.json`
 * `object_clip_index.npz`
 
-### Parameters
 
-* `-s`: scene path
-* `--model_path`: model output path
-* `--iteration`: checkpoint iteration
-* `--gui_width`, `--gui_height`: window size
+### View Mode Switching
 
-### Output
+Switch between different visualization modes:
 
-* Interactive visualization interface (no mandatory file output unless explicitly exported)
+* **RGB**: original rendered appearance
+* **Segmentation**: semantic or instance labels
+* **Overlay**: blended RGB and semantic visualization
 
----
+<img width="1096" src="media/modes.png" />
 
-## 5. Configuration Files
+### Hierarchical Semantic Interaction
+
+Interact with the scene using hierarchical semantics derived from CityGML:
+
+* building → surface → part
+* enables structured understanding of urban elements
+
+<img width="400" src="media/hierarchy.png" />
+
+### Semantic Attribute Retrieval
+
+Click on any object in the scene to retrieve its corresponding **CityGML semantic information**, including:
+
+* object type
+* attributes
+* hierarchical relations
+
+<img width="1096" src="media/semantic.png" />
+
+### Semantic Search
+
+Perform hybrid semantic queries combining:
+
+* **structured labels** (e.g., building components from CityGML)
+* **open-vocabulary queries** (via CLIP for non-building elements)
+
+This enables flexible search across both predefined semantics and free-form textual concepts.
+
+<img width="1096" src="media/search.png" />
+
+
+## Configuration Files
 
 * `mask/config.json`: preprocessing parameters (SAM, CLIP, projection)
-* `config/train.json`: training-specific parameters (e.g., regularization)
-* `arguments.py`: shared configuration (data, model, rendering, pipeline)
-
----
+* `config/train.json`: training parameters
+* `arguments.py`: shared configuration

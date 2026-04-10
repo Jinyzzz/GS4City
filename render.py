@@ -373,22 +373,6 @@ def render_sets(dataset: ModelParams, pipeline: PipelineParams, render_params: R
 # ============ main: use output folder name only ============
 
 if __name__ == "__main__":
-    """
-    Example:
-        cd /workspace/Gaga
-        python render.py \
-            --output_name subset_building1_29_1112 \
-            --iteration 10000 \
-            --render_video
-
-    You only need the folder name under ./output.
-    The script will load training-time args from:
-        ./output/<output_name>/cfg_args
-
-    Then it will:
-      - force dataset.model_path to ./output/<output_name>
-      - load point_cloud and classifier.pth from that directory
-    """
 
     # ====== 1) Parse CLI args (render-related args + output_name only) ======
     parser = ArgumentParser(description="Testing (render) script parameters")

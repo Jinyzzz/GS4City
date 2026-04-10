@@ -605,7 +605,7 @@ class SemanticGaussianGUI:
             )
 
         dpg.create_viewport(
-            title="Gaga Semantic Gaussian Viewer",
+            title="GS4City Semantic Gaussian Viewer",
             width=self.window_width + RIGHT_PANEL_WIDTH + 10,
             height=self.window_height,
             resizable=False,

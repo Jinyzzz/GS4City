@@ -18,7 +18,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Gaga Semantic Gaussian GUI")
+    parser = argparse.ArgumentParser(description="GS4City Semantic Gaussian GUI")
 
     lp = ModelParams(parser)
     pp = PipelineParams(parser)
