@@ -1,4 +1,10 @@
-# GS4City
+# GS4City: Hierarchical Semantic Gaussian Splatting via City-Model Priors
+
+Qilin Zhang, Jinyu Zhu, Olaf Wysocki, Benjamin Busam, Boris Jutzi
+
+[**Project Page**](https://zqlin0521.github.io/GS4City/) | [**arXiv**](https://arxiv.org/abs/2604.11401)
+
+---
 
 ## Introduction
 
